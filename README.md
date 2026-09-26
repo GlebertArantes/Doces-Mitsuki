@@ -13,6 +13,39 @@ começa com "pronta entrega" fechada (`dm_store_status.is_open=false`).
 Preços e sabores seguem os valores de demonstração do protótipo V3 aprovado, marcados como
 `[DEMO]` na descrição — ainda pendentes de confirmação com a Mitsuki.
 
+## Layout mobile (overflow horizontal) e nomenclatura "cliente"
+
+Duas correções nesta rodada, sem tocar em lógica de checkout, preços, estoque, permissões ou
+regras de reserva:
+
+**Overflow horizontal.** A causa real (confirmada com teste real em navegador, não só leitura de
+CSS — ver "Testes executados" abaixo) era um nome de produto ou de cliente comprido, sem espaços
+quebráveis, dentro de uma linha `flex` (`.mini-row`, no estoque do painel, e `.order-top`, nas
+reservas): o item do flex crescia para caber o texto inteiro em vez de quebrar linha, empurrando o
+botão "Editar" e o valor da reserva para fora da tela — em qualquer largura de celular, não só nas
+mais estreitas. Corrigido em `css/styles.css`:
+- `*{min-width:0}` (regra global) e `overflow-wrap:anywhere` em `body` (herda para todo texto):
+  qualquer texto comprido agora quebra em vez de forçar a largura do elemento.
+- Grades que ainda usavam `1fr 1fr` sem `minmax(0,1fr)` (`.stats`, `.order-grid`, `.flavor-grid`,
+  `.footer-nav`) passaram a usar `repeat(2,minmax(0,1fr))`, o mesmo padrão que `.products` já usava
+  corretamente — sem isso, uma célula de grid pode recusar encolher abaixo do conteúdo, com o mesmo
+  efeito de estourar a largura.
+- `.edit-btn` e o valor da reserva (`.order-top > strong`) ganharam `white-space:nowrap` +
+  `flex-shrink:0` explícitos, para que só o texto longo (nome do produto/cliente) quebre — eles
+  continuam numa linha só.
+- `html, body{overflow-x:hidden}`: rede de segurança padrão contra qualquer resíduo de overflow
+  (não desativa o zoom — isso é controlado só pela tag `<meta name="viewport">`, que não foi
+  tocada — nem afeta a rolagem vertical da página nem a rolagem horizontal própria de `.seg`, os
+  filtros do cardápio, que continua funcionando isoladamente).
+- Removida uma regra `.slots{display:grid...}` órfã (sobrava do protótipo, não usada por nenhum
+  HTML atual) que colidia com a `.slots`/`.slot` de verdade — usada pelo modal "monte sua
+  caixinha" — e mudava seu layout de flex para grid 2 colunas sem necessidade.
+
+**Nomenclatura.** Textos que chamavam quem compra de "funcionários" foram trocados por "clientes"
+em `admin/index.html`, `js/admin.js` e neste README (dica da chave Pix, legenda de loja
+aberta/fechada, mensagem de "nenhuma reserva ainda", descrição das tabelas). A retirada na Brago
+continua mencionada como informação de local de retirada, não como vínculo empregatício.
+
 ## Estrutura
 
 ```
@@ -57,7 +90,7 @@ Tabelas novas (aditivas, isoladas por `tenant_id`, todas com RLS):
 - `dm_availability_public`: projeção pública só com "disponível/esgotado" (sem números),
   mantida em sincronia por trigger.
 - `dm_store_status`: loja aberta/fechada para novas reservas + instruções de retirada + Pix.
-- `dm_reservations` / `dm_reservation_items`: reservas dos funcionários (leitura restrita à
+- `dm_reservations` / `dm_reservation_items`: reservas dos clientes (leitura restrita à
   equipe da loja).
 - `dm_sales_report`: view de relatório (staff-only, `security_invoker`).
 
@@ -419,6 +452,37 @@ este ambiente não tem saída de rede para lugar nenhum, confirmado com um domí
 relação com o projeto. O que foi possível — revisão de código, um teste real de Node.js sem rede
 para a lógica de IP, e replicação por SQL das consultas que a função faz — está descrito acima e
 não substitui os testes de rede pendentes.
+
+**Nesta rodada** (overflow horizontal e nomenclatura — sem tocar em `is_active`/`is_open`, sem
+ativar reservas, sem alterar checkout/preços/estoque/permissões):
+
+Diferente das rodadas anteriores, este teste **não dependia de rede até o Supabase** — só de um
+navegador real (Chromium, já pré-instalado neste ambiente) servindo os arquivos localmente. Como
+`js/store.js` e `js/admin.js` só renderizam depois de buscar dados do Supabase, e a rede para lá
+está bloqueada, criei um módulo substituto do `supabase-js` (interceptando a importação via
+`esm.sh`) que devolve dados de teste fixos — incluindo nomes de produto e de cliente propositalmente
+compridos e sem espaço, para forçar o cenário de overflow — e rodei a página de verdade num
+Chromium real, num servidor HTTP local:
+- Larguras testadas: 320, 360, 375, 390, 430px e desktop (1280px), na vitrine e no painel.
+- Métrica objetiva: `document.documentElement.scrollWidth` comparado a `window.innerWidth` (mais
+  qualquer elemento cujo `getBoundingClientRect()` ultrapassasse a viewport) — não uma inspeção
+  visual subjetiva.
+- **Antes da correção**: sem overflow na vitrine (cardápio, carrinho, modal de montar caixinha),
+  mas overflow real e reproduzível no painel a partir de 320px até 430px (`scrollWidth` chegava a
+  504px numa tela de 375px) — o botão "Editar" do estoque ficava fisicamente fora da tela.
+  Confirmado que a causa era o nome do produto sem espaços, testado com um item de cardápio real
+  fixture criado propositalmente sem espaços.
+- **Depois da correção**: 0 ocorrências de overflow em todas as 6 larguras, nas duas páginas,
+  inclusive depois de abrir o carrinho e o modal "monte sua caixinha" e escolher um sabor.
+- Confirmado que `.seg` (filtros do cardápio) mantém `overflow-x:auto` (rolagem própria intacta) e
+  que a tag `<meta name="viewport">` não foi alterada (zoom continua permitido).
+- Capturas de tela em 375px conferidas visualmente: o botão "Editar" e o valor da reserva não
+  quebram mais linha (ficam numa linha só, como antes), só o texto longo do produto/cliente quebra.
+- Terminologia: `grep` confirma zero ocorrências de "funcionári", "colaborador" ou "empregad" em
+  todo o repositório (HTML, JS, README, SQL) após as trocas.
+
+Os arquivos de teste (módulo substituto do Supabase, scripts Playwright, capturas de tela) foram
+usados só localmente nesta sessão e não foram commitados — não fazem parte do app.
 
 ## Pendências para ativação comercial
 

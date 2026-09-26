@@ -141,7 +141,7 @@ async function loadAll() {
 }
 
 function renderSettings() {
-  $('open-caption').textContent = storeStatus.is_open ? 'Funcionários podem fazer reservas.' : 'Novas reservas estão pausadas.';
+  $('open-caption').textContent = storeStatus.is_open ? 'Clientes podem fazer reservas.' : 'Novas reservas estão pausadas.';
   $('toggle-open').classList.toggle('on', storeStatus.is_open);
   $('toggle-open').setAttribute('aria-pressed', String(storeStatus.is_open));
   $('settings-form').elements.pickup.value = storeStatus.pickup_instructions || '';
@@ -199,7 +199,7 @@ function renderOrders() {
         </select>
         <button class="paid-toggle ${o.payment_status === 'pago' ? 'yes' : ''}" data-order-paid="${esc(o.id)}" ${o.status === 'cancelado' ? 'disabled' : ''}>${o.payment_status === 'pago' ? '✓ Pix confirmado' : 'Pix pendente'}</button>
       </div>
-    </div>`).join('') : '<div class="blank">🧁<br>As reservas dos funcionários aparecerão aqui.</div>';
+    </div>`).join('') : '<div class="blank">🧁<br>As reservas dos clientes aparecerão aqui.</div>';
 }
 
 function openModal(html) { $('sheet').innerHTML = '<div class="sheet-handle"></div>' + html; $('overlay').classList.remove('hidden'); document.body.classList.add('no-scroll'); }

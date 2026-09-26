@@ -26,6 +26,7 @@ const LOGIN_ERROR_MESSAGES = {
   captcha_failed: 'Não foi possível confirmar que você não é um robô. Tente novamente.',
   invalid_request: 'Não foi possível entrar. Tente novamente.',
   origin_not_allowed: 'Acesse pelo endereço oficial da lojinha.',
+  service_unavailable: 'Não foi possível entrar agora. Tente novamente em instantes.',
 };
 
 function renderAuthScreen(errorMessage, submitting) {

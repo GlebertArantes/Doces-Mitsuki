@@ -155,7 +155,38 @@ Function.
 `service_role` da Edge Function escreve nela, e ela ignora RLS por natureza) — mesmo que alguém
 tentasse escrever direto na tabela para forjar sucesso/falha, a política de RLS recusa.
 
-### Proteções nativas do Supabase Auth e Cloudflare Turnstile
+### Endurecimento da Edge Function (2ª revisão)
+
+Uma segunda revisão encontrou 3 pontos reais na implementação da Edge Function (não no desenho
+geral, que continuou correto) e um ponto de documentação:
+
+1. **Erros de banco nas consultas de contagem de tentativas não eram checados.** Se a consulta
+   que conta falhas recentes falhasse por qualquer motivo, `count` vinha `undefined`, e
+   `undefined ?? 0` virava "zero tentativas" — uma falha de infraestrutura podia, na prática,
+   desativar o bloqueio. Agora qualquer erro nessas duas consultas (por usuário e por IP) recusa
+   o login com um erro controlado (`service_unavailable`, HTTP 503) em vez de seguir como se não
+   houvesse tentativas.
+2. **A gravação da tentativa não era conferida.** Um login com senha certa que não conseguisse
+   gravar o registro de segurança em `dm_login_attempts` ainda devolvia sucesso ao navegador.
+   Agora, se essa gravação falhar, o login É RECUSADO mesmo com a senha certa — a sessão que o
+   Supabase Auth já tinha emitido é descartada (`signOut`) e o navegador recebe
+   `service_unavailable`. A gravação de uma tentativa malsucedida que falhe não muda o resultado
+   (já era uma recusa), mas fica registrada nos logs da função para investigação.
+3. **O IP de origem vinha de `x-forwarded-for` sem qualquer tratamento**, usando o primeiro valor
+   da cadeia — que é exatamente o valor mais fácil de um cliente forjar. A função agora usa o
+   ÚLTIMO valor da cadeia (mais próximo do que a infraestrutura da Supabase realmente observou, no
+   padrão usual de proxies que acrescentam ao final) e valida que parece um IP de verdade antes de
+   usar. Ainda assim, **não há confirmação oficial de que a infraestrutura de Edge Functions da
+   Supabase segue exatamente esse padrão** — por isso o limite por IP é tratado como uma camada
+   adicional, nunca a fronteira de segurança principal. A defesa que não depende de rede nenhuma é
+   o limite por usuário (5 falhas/15min), que continua valendo mesmo que o IP observado seja
+   totalmente forjável.
+4. **O e-mail sintético não deve seguir um padrão previsível.** Este README é público (o
+   repositório é público) e documenta o formato `usuario@dominio-interno` como exemplo — o que
+   significa que o *padrão* não é segredo, só o valor específico de cada conta. Ver recomendação
+   concreta na seção "Criar o acesso de uma pessoa" abaixo.
+
+### Proteções nativas do Supabase Auth, Cloudflare Turnstile e risco residual do e-mail
 
 O Supabase Auth já aplica seus próprios limites de tentativas de login a nível de projeto — isso
 é uma configuração **global**, compartilhada com Nosso Closet, Donna Store e EB Fit, e não foi
@@ -167,6 +198,18 @@ tentar a senha (`verifyTurnstile`, controlado pelo secret `DM_TURNSTILE_SECRET_K
 mas nenhum site key/secret do Turnstile foi criado para a Doces Mitsuki ainda, então essa
 checagem fica pulada até alguém configurar o secret. Recomendo ativar isso antes de abrir a loja
 para pedidos reais, se o volume de tentativas de login justificar; não é bloqueante para o V1.
+
+**Risco residual, documentado explicitamente (não "impossível de descobrir"):** o desenho desta
+função impede o navegador de aprender o e-mail sintético através do fluxo de login normal, mas
+não impede alguém de tentar *adivinhar* esse e-mail e chamar `supabase.auth.signInWithPassword`
+diretamente contra a API pública do Supabase Auth, por fora da nossa Edge Function e do nosso
+bloqueio por tentativas. Se isso acontecer, quem protege é inteiramente o Supabase Auth em si —
+suas proteções globais de rate limiting (não alteradas por nós, compartilhadas com os outros
+tenants) e, se ativado no futuro, o "Leaked Password Protection" do projeto (também uma
+configuração global, hoje desligada — ver advisor de segurança; ativá-la afeta todos os tenants
+e não foi feito aqui sem essa avaliação de impacto). A mitigação que está sob nosso controle total
+é tornar o e-mail difícil de adivinhar: ver a recomendação de e-mail aleatório/opaco abaixo, em
+vez de um padrão previsível a partir do usuário.
 
 ### Recuperação de senha
 
@@ -182,13 +225,24 @@ um administrador troca a senha dela pelo Dashboard.
 ### Criar o acesso de uma pessoa
 
 Feito hoje via SQL pela TaskZap (não existe tela para isso no painel — é intencional, só quem já
-tem acesso ao Supabase pode criar novos acessos):
+tem acesso ao Supabase pode criar novos acessos).
+
+**Importante sobre o e-mail:** use um endereço **aleatório/opaco**, não um padrão previsível a
+partir do usuário (nunca `mitsuki@algumacoisa`) — este README é público, então qualquer padrão
+"usuario@domínio" documentado aqui deixa de ser segredo no dia em que alguém ler o repositório.
+Um UUID aleatório como parte local (ex.: `f3a9c1e2-7b4d-4e6a-9c2f-1d8e5b3a7c90@doces-mitsuki-auth.invalid`)
+não tem relação nenhuma com o `username` de login, então adivinhar um não ajuda a adivinhar o
+outro:
+
 ```sql
 -- 1. criar o usuário no Supabase Auth (Dashboard → Authentication → Users → Add user) com um
---    e-mail interno, nunca o pessoal, ex.: mitsuki@doces-mitsuki.taskzap.internal
+--    e-mail ALEATÓRIO/OPACO, nunca o pessoal e nunca baseado no username, ex.:
+--    f3a9c1e2-7b4d-4e6a-9c2f-1d8e5b3a7c90@doces-mitsuki-auth.invalid
+--    (gere um UUID novo para cada conta; o domínio ".invalid" é reservado pela RFC 2606 e
+--    nunca resolve de verdade, então não há risco de alguém registrar esse domínio depois)
 -- 2. vincular ao tenant:
 insert into tenant_memberships (tenant_id, user_id, role) values ('<tenant_id>', '<user_id>', 'owner');
--- 3. definir o usuário de login:
+-- 3. definir o usuário de login (esse sim pode ser memorável, é só o "usuário" que a pessoa digita):
 insert into dm_admin_usernames (tenant_id, username, user_id) values ('<tenant_id>', 'mitsuki', '<user_id>');
 ```
 
@@ -308,13 +362,71 @@ rede reais, de que a tela de login funciona de ponta a ponta e de que o painel c
 normalmente depois — recomendo testar em `https://doces-mitsuki.pages.dev/admin/` assim que a
 conta definitiva da Mitsuki existir.
 
+**Nesta rodada** (endurecimento da Edge Function — tratamento de erros, confirmação de gravação,
+IP confiável — sem tocar em `is_active`/`is_open`, sem ativar reservas, sem tocar em dados de
+outros tenants):
+
+Antes de testar, confirmei de novo se este ambiente ganhou saída de rede desde a rodada anterior:
+```
+curl https://bydqpemkvljwvuakgcxu.supabase.co/functions/v1/dm-admin-login → connect_rejected (403 do proxy de saída)
+curl https://doces-mitsuki.pages.dev/                                     → connect_rejected
+curl https://example.com/ (domínio genérico, de controle)                  → connect_rejected
+```
+O terceiro teste (um domínio qualquer, sem relação com este projeto) confirma que o bloqueio é uma
+política geral de saída de rede deste ambiente, não algo específico do Supabase ou do Cloudflare —
+**não há como fazer nenhuma chamada HTTP real daqui**, para lugar nenhum. Isso não é uma
+simulação: é a confirmação de que os testes de HTTP/navegador pedidos **não puderam ser
+executados nesta sessão**, e não devem ser considerados aprovados com base em SQL. O que segue
+abaixo é o que consegui validar por outros meios — código lido linha a linha e, onde deu, execução
+real (não simulação) fora da rede.
+
+- **Falha na consulta do contador de tentativas** / **falha ao registrar uma tentativa**: não há
+  como forçar um erro real do PostgREST/Postgres de fora da função sem invocá-la por HTTP. Validado
+  só por **leitura do código**: as duas consultas de contagem (`userAttemptsRes`, `ipAttemptsRes`)
+  e a gravação em `recordAttempt` agora checam `error` explicitamente e retornam
+  `service_unavailable` (ou recusam o sucesso, no caso da gravação) em vez de seguir como se nada
+  tivesse acontecido — ver o arquivo `supabase/functions/dm-admin-login/index.ts` e os comentários
+  no topo dele. **Isto é revisão de código, não um teste executado.**
+- **Tentativa de falsificar o IP**: este *pôde* ser testado de verdade, sem precisar de rede — as
+  funções `looksLikeIp`/`extractClientIp` foram reproduzidas em
+  `supabase/functions/dm-admin-login/ip-extraction.test.mjs` (`node ip-extraction.test.mjs`,
+  Node v22.22.2, disponível neste ambiente) e executadas contra 7 cenários,
+  incluindo cadeias de `x-forwarded-for` forjadas pelo "cliente" (múltiplos IPs falsos
+  prependados, lixo não numérico, cabeçalho ausente, IPv6). As 7 passaram: a função sempre usa o
+  último valor da cadeia (o presumidamente mais confiável) e nunca aceita lixo como IP. Isso testa
+  a lógica de extração isoladamente, com código real executado — não testa (não dá pra testar sem
+  rede) se a infraestrutura da Supabase de fato preenche esse cabeçalho do jeito que o comentário
+  no código presume; esse ponto continua documentado como incerteza, não coberto por este teste.
+- Conta administrativa temporária criada só para este teste (`auth.users` + `tenant_memberships` +
+  `dm_admin_usernames`, senha real via `pgcrypto`/`crypt`), removida ao final — reproduz as
+  consultas que a função faz, mas por SQL direto, não por HTTP:
+  - Usuário e senha corretos → todas as etapas (mapeamento, vínculo, hash da senha) conferem.
+  - Senha incorreta → comparação de hash falha, como esperado.
+  - Usuário inexistente → mapeamento vazio.
+  - Usuário sem vínculo com o tenant → removendo `tenant_memberships`, a checagem de vínculo que a
+    função faz volta `false` mesmo com usuário/senha corretos.
+  - Bloqueio por excesso de tentativas → inserindo 5 falhas, a contagem que decide o bloqueio já
+    acusa o limite atingido (mesmo cálculo desta rodada, sem mudança de comportamento aqui).
+- **Logout** e **acesso ao painel sem autenticação**: comportamento inalterado desde a rodada
+  anterior (`js/admin.js`: `boot()` chama `renderAuthScreen()` quando não há sessão;
+  `logout-btn` chama `supabase.auth.signOut()` e volta pra tela de login) — confirmado por
+  leitura do código, não há lógica nova aqui para testar nesta rodada, e o mesmo bloqueio de rede
+  impede confirmar pelo navegador.
+
+**Resumo honesto**: os testes que dependem de rede real (chamada HTTP à Edge Function publicada,
+formulário de login no navegador, painel carregando depois do login) **não foram executados** —
+este ambiente não tem saída de rede para lugar nenhum, confirmado com um domínio de controle sem
+relação com o projeto. O que foi possível — revisão de código, um teste real de Node.js sem rede
+para a lógica de IP, e replicação por SQL das consultas que a função faz — está descrito acima e
+não substitui os testes de rede pendentes.
+
 ## Pendências para ativação comercial
 
-1. **Conta de administração da Mitsuki**: nenhum usuário Supabase Auth foi criado ainda (sem
-   e-mail informado). Quando for criada, o e-mail da conta deve ser um endereço **interno/
-   sintético** (ex.: `mitsuki@doces-mitsuki.taskzap.internal`), nunca o e-mail pessoal dela — ver
-   seção "Login do painel" acima para o passo a passo (criar o usuário, vincular em
-   `tenant_memberships`, definir o `username` em `dm_admin_usernames`).
+1. **Conta de administração da Mitsuki**: ainda **não criada**, conforme pedido. Quando for
+   criada, o e-mail da conta deve ser um endereço **aleatório/opaco** (ex.: um UUID
+   `@doces-mitsuki-auth.invalid`), **não** um padrão previsível a partir do usuário — ver seção
+   "Login do painel" acima (subseção "Criar o acesso de uma pessoa") para o passo a passo completo
+   e o porquê de evitar um padrão previsível.
 2. **Confirmação comercial**: preços reais, sabores definitivos, chave Pix.
 3. **Autorização de imagem**: o retrato da Mitsuki usado hoje é um monograma ilustrativo (não é
    uma foto real da proprietária). Substituir só após autorização explícita dela.
@@ -336,14 +448,20 @@ conta definitiva da Mitsuki existir.
 conector do Cloudflare não está autorizado aqui, então não tenho como inspecionar ou alterar a
 configuração do projeto Pages diretamente).
 
-A verificar manualmente no painel do Cloudflare Pages (Settings → Builds & deployments):
-- **Production branch = `main`.** O repositório está com `main` e `claude/ecstatic-curie-0kjnzw`
-  sincronizadas no mesmo commit (ver seção "Branches" acima), então qualquer uma serviria hoje —
-  mas o combinado é `main` ser a branch de produção, e é nela que os próximos pushes de deploy
-  vão parar.
-- Nenhum build command / diretório raiz como saída (site estático, sem build step).
-- Variáveis de ambiente: nenhuma necessária — `js/config.js` já traz a URL e a chave publicável
-  do Supabase (públicas por design, seguras com RLS).
+Não tenho o conector do Cloudflare autorizado nesta sessão, então não consigo confirmar
+programaticamente nem o "production branch" nem qual commit está de fato implantado. A verificar
+manualmente no painel do Cloudflare Pages:
+1. **Settings → Builds & deployments → Production branch = `main`.** O repositório está com
+   `main` e `claude/ecstatic-curie-0kjnzw` sincronizadas no mesmo commit (ver seção "Branches"
+   acima e a confirmação no fim deste README), então qualquer uma serviria hoje — mas o combinado
+   é `main` ser a branch de produção, e é nela que os próximos pushes de deploy vão parar.
+2. **Deployments → o deployment mais recente da `main` deve ter o hash de commit igual ao commit
+   atual desta entrega** (o relatório final desta rodada traz o SHA exato). Se o Cloudflare
+   mostrar um commit mais antigo como "Production", o deploy automático não disparou — nesse caso,
+   um "Retry deployment" ou um novo push vazio resolve.
+3. Nenhum build command / diretório raiz como saída (site estático, sem build step).
+4. Variáveis de ambiente: nenhuma necessária — `js/config.js` já traz a URL e a chave publicável
+   do Supabase (públicas por design, seguras com RLS).
 
 A Edge Function `dm-admin-login` está publicada no Supabase (não no Cloudflare) e já aceita
 requisições de `https://doces-mitsuki.pages.dev` e de subdomínios `*.doces-mitsuki.pages.dev`

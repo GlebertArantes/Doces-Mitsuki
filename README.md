@@ -66,6 +66,8 @@ Funções (`SECURITY DEFINER`, com checagens internas de autorização):
   via `idempotency_key`.
 - `dm_cancel_reservation(...)`: só para admin/owner do tenant; devolve o estoque e é idempotente
   (cancelar um pedido já cancelado não devolve estoque duas vezes).
+- `dm_resolve_admin_login(...)` / `dm_report_login_result(...)`: suportam o login do painel por
+  usuário (ver seção "Login do painel" abaixo).
 
 Migrações em `supabase/migrations/`, aplicadas nesta ordem:
 1. `0001_dm_doces_mitsuki_schema.sql`
@@ -87,8 +89,51 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
    conseguia cancelar nada de fato —, mas agora nem chega a entrar na função: recebe
    `permission denied` antes de qualquer lógica interna rodar. `dm_create_reservation`
    não foi tocada e continua acessível por `anon`, que é quem precisa reservar sem login.)
+6. `0006_dm_username_login.sql` (login do painel por usuário em vez de e-mail — ver seção
+   "Login do painel" abaixo).
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
+
+## Login do painel
+
+A Mitsuki e os administradores da TaskZap entram no painel com **usuário + senha**, sem e-mail
+na tela. Por baixo, quem continua validando a senha é o Supabase Auth de verdade — nada de
+checagem de senha em JavaScript ou direto no banco.
+
+Como funciona:
+1. Cada pessoa com acesso ao painel tem uma conta Supabase Auth cujo e-mail é um endereço
+   **interno/sintético** (ex.: `mitsuki@doces-mitsuki.taskzap.internal`), nunca o e-mail pessoal
+   dela — e uma linha em `dm_admin_usernames` associando um "usuário" (ex.: `mitsuki`) a essa
+   conta.
+2. No login, o painel chama `dm_resolve_admin_login(tenant, usuario)`, que devolve o e-mail
+   interno correspondente (ou um erro genérico "usuário ou senha incorretos" se o usuário não
+   existir, sem revelar qual dos dois é o problema).
+3. O painel então chama `supabase.auth.signInWithPassword({ email, password })` normalmente — é
+   o Supabase Auth quem verifica a senha, exatamente como antes.
+4. O resultado (sucesso ou falha) é reportado a `dm_report_login_result`, que grava a tentativa.
+   Depois de 5 falhas em 15 minutos para o mesmo usuário, `dm_resolve_admin_login` passa a
+   recusar novas tentativas (`too_many_attempts`) mesmo com a senha certa, até a janela expirar;
+   um login bem-sucedido limpa esse histórico de falhas na hora.
+5. A checagem de `tenant_memberships` continua exatamente como antes: mesmo com usuário/senha
+   corretos, sem vínculo no tenant o painel nunca é liberado (e o vínculo é revalidado a cada
+   `dm_resolve_admin_login`, não só no login inicial — revogar o vínculo de alguém já impede
+   login novo imediatamente).
+
+Limitação conhecida: como quem valida a senha é o `supabase.auth.signInWithPassword` chamado
+pelo próprio navegador, o e-mail interno resolvido trafega nessa chamada (nunca aparece na tela,
+nunca é digitado, mas tecnicamente passa pela rede até o Supabase). Isso é uma troca deliberada
+para não precisar de uma Edge Function própria nesta V1; pode ser endurecido depois movendo o
+`signInWithPassword` para uma Edge Function que nunca devolve o e-mail ao navegador, se for
+necessário.
+
+Criar o acesso de uma pessoa (feito hoje via SQL pela TaskZap, não pelo painel):
+```sql
+-- 1. criar o usuário no Supabase Auth com um e-mail interno (nunca o pessoal)
+-- 2. vincular ao tenant:
+insert into tenant_memberships (tenant_id, user_id, role) values ('<tenant_id>', '<user_id>', 'owner');
+-- 3. definir o usuário de login:
+insert into dm_admin_usernames (tenant_id, username, user_id) values ('<tenant_id>', 'mitsuki', '<user_id>');
+```
 
 ## Como testar localmente
 
@@ -142,11 +187,34 @@ Playwright/celular.
 - Advisor de segurança: o achado "anon pode executar `dm_cancel_reservation`" desapareceu;
   nenhum achado novo apareceu.
 
+**Nesta rodada** (migração 0006, login por usuário, sem tocar em `is_active`/`is_open`):
+- Usuário de teste descartável (`auth.users` + `tenant_memberships` + `dm_admin_usernames`),
+  removido ao final.
+- `dm_resolve_admin_login` com usuário válido → devolve o e-mail interno correto.
+- Usuário inexistente → `invalid_credentials` (mensagem genérica, não diz se é o usuário ou a
+  senha que está errada).
+- 5 falhas reportadas (`dm_report_login_result(..., false)`) → a 6ª chamada de
+  `dm_resolve_admin_login` é bloqueada com `too_many_attempts`, mesmo que o usuário/senha
+  estivessem certos.
+- Reportar um sucesso (`dm_report_login_result(..., true)`) zera o histórico de falhas na hora;
+  `dm_resolve_admin_login` volta a funcionar imediatamente.
+- Remover o vínculo (`tenant_memberships`) do usuário de teste → `dm_resolve_admin_login` passa a
+  recusar mesmo com o usuário existindo (a checagem de vínculo é revalidada a cada tentativa de
+  login, não só uma vez).
+
+Não testado (fora do alcance desta sessão): o formulário de login em si no navegador — como
+`signInWithPassword` sempre acaba chamando a API do Supabase Auth pela rede, e este ambiente não
+tem saída de rede até `supabase.co`, não dá para confirmar aqui, pelo navegador, que a senha
+digitada por uma pessoa real é aceita. A lógica de resolução de usuário, bloqueio por tentativas
+e checagem de vínculo — que é a parte nova desta rodada — foi validada como descrito acima.
+
 ## Pendências para ativação comercial
 
 1. **Conta de administração da Mitsuki**: nenhum usuário Supabase Auth foi criado ainda (sem
-   e-mail informado). Após receber o e-mail dela, criar o usuário e inserir uma linha em
-   `tenant_memberships` (`role='owner'` ou `'admin'`) vinculando-a ao tenant.
+   e-mail informado). Quando for criada, o e-mail da conta deve ser um endereço **interno/
+   sintético** (ex.: `mitsuki@doces-mitsuki.taskzap.internal`), nunca o e-mail pessoal dela — ver
+   seção "Login do painel" acima para o passo a passo (criar o usuário, vincular em
+   `tenant_memberships`, definir o `username` em `dm_admin_usernames`).
 2. **Confirmação comercial**: preços reais, sabores definitivos, chave Pix.
 3. **Autorização de imagem**: o retrato da Mitsuki usado hoje é um monograma ilustrativo (não é
    uma foto real da proprietária). Substituir só após autorização explícita dela.

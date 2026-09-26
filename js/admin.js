@@ -20,7 +20,12 @@ function notify(message) {
   toastHandle = setTimeout(() => t.classList.add('hidden'), 3400);
 }
 
-function renderAuthScreen(errorMessage) {
+const LOGIN_ERROR_MESSAGES = {
+  invalid_credentials: 'Usuário ou senha incorretos.',
+  too_many_attempts: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.',
+};
+
+function renderAuthScreen(errorMessage, submitting) {
   $('admin-view').classList.add('hidden');
   $('auth-view').classList.remove('hidden');
   $('auth-view').innerHTML = `
@@ -29,20 +34,50 @@ function renderAuthScreen(errorMessage) {
       <h1>Entrar</h1>
       <p>Acesso restrito à Mitsuki e a administradores autorizados da TaskZap.</p>
       <form id="login-form">
-        <label class="field">E-mail<input type="email" name="email" required autocomplete="username"></label>
-        <label class="field">Senha<input type="password" name="password" required autocomplete="current-password"></label>
-        <button class="button full" type="submit">Entrar</button>
+        <label class="field">Usuário<input type="text" name="username" required autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="32" placeholder="Ex.: mitsuki"></label>
+        <label class="field">Senha
+          <span style="display:flex;gap:8px">
+            <input type="password" name="password" required autocomplete="current-password" style="flex:1" id="login-password">
+            <button type="button" class="iconbtn" id="toggle-password" aria-label="Mostrar senha" aria-pressed="false" style="flex-shrink:0">👁️</button>
+          </span>
+        </label>
+        <button class="button full" type="submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Entrando…' : 'Entrar'}</button>
         ${errorMessage ? `<p class="error-text">${esc(errorMessage)}</p>` : ''}
       </form>
     </div>`;
+  $('toggle-password').addEventListener('click', () => {
+    const input = $('login-password');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    $('toggle-password').setAttribute('aria-pressed', String(!showing));
+    $('toggle-password').setAttribute('aria-label', showing ? 'Mostrar senha' : 'Ocultar senha');
+    $('toggle-password').textContent = showing ? '👁️' : '🙈';
+  });
   $('login-form').addEventListener('submit', async e => {
     e.preventDefault();
-    const email = e.target.elements.email.value.trim();
+    const username = e.target.elements.username.value.trim().toLowerCase();
     const password = e.target.elements.password.value;
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return renderAuthScreen('E-mail ou senha incorretos.');
-    await boot();
+    if (!username || !password) return;
+    renderAuthScreen(null, true);
+    await attemptLogin(username, password);
   });
+}
+
+async function attemptLogin(username, password) {
+  const { data: email, error: resolveError } = await supabase.rpc('dm_resolve_admin_login', {
+    p_tenant_slug: TENANT_SLUG, p_username: username,
+  });
+  if (resolveError) {
+    const code = (resolveError.message || '').match(/[a-z_]+/)?.[0];
+    return renderAuthScreen(LOGIN_ERROR_MESSAGES[code] || 'Não foi possível entrar. Tente novamente.');
+  }
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+  await supabase.rpc('dm_report_login_result', {
+    p_tenant_slug: TENANT_SLUG, p_username: username, p_success: !signInError,
+  });
+  if (signInError) return renderAuthScreen(LOGIN_ERROR_MESSAGES.invalid_credentials);
+  await boot();
 }
 
 async function boot() {

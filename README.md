@@ -22,10 +22,11 @@ css/styles.css        # identidade visual da V3 aprovada (preservada)
 js/config.js          # URL + chave publicável do Supabase (pública, segura com RLS)
 js/supabase-client.js
 js/store.js            # lógica da vitrine, carrinho, checkout
-js/admin.js             # lógica do painel
+js/admin.js             # lógica do painel (login por usuário via Edge Function)
 assets/img/              # imagens do protótipo V3 extraídas (ilustrativas)
 supabase/migrations/      # migrações versionadas (schema aditivo)
 supabase/seed/demo_catalog.sql  # dados de demonstração (idempotente)
+supabase/functions/dm-admin-login/  # Edge Function que faz o login do painel
 ```
 
 Site estático puro (sem build step): pode ser publicado diretamente no Cloudflare Pages.
@@ -66,8 +67,9 @@ Funções (`SECURITY DEFINER`, com checagens internas de autorização):
   via `idempotency_key`.
 - `dm_cancel_reservation(...)`: só para admin/owner do tenant; devolve o estoque e é idempotente
   (cancelar um pedido já cancelado não devolve estoque duas vezes).
-- `dm_resolve_admin_login(...)` / `dm_report_login_result(...)`: suportam o login do painel por
-  usuário (ver seção "Login do painel" abaixo).
+
+O login do painel **não** é feito por uma RPC de banco chamável pelo navegador — ver seção
+"Login do painel" abaixo para o porquê e como funciona hoje (Edge Function `dm-admin-login`).
 
 Migrações em `supabase/migrations/`, aplicadas nesta ordem:
 1. `0001_dm_doces_mitsuki_schema.sql`
@@ -89,46 +91,101 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
    conseguia cancelar nada de fato —, mas agora nem chega a entrar na função: recebe
    `permission denied` antes de qualquer lógica interna rodar. `dm_create_reservation`
    não foi tocada e continua acessível por `anon`, que é quem precisa reservar sem login.)
-6. `0006_dm_username_login.sql` (login do painel por usuário em vez de e-mail — ver seção
-   "Login do painel" abaixo).
+6. `0006_dm_username_login.sql` (primeira versão do login por usuário — **substituída pela 0007**,
+   ver abaixo; o arquivo é mantido como está, por histórico, não foi reescrito).
+7. `0007_dm_secure_admin_login.sql` (corrige um problema de desenho encontrado em revisão na 0006:
+   `dm_report_login_result` aceitava um "sucesso" informado pelo próprio navegador — um cliente
+   não autenticado podia limpar o histórico de falhas de qualquer usuário ou registrar falhas
+   falsas para bloquear alguém legítimo; e `dm_resolve_admin_login` devolvia o e-mail sintético
+   para o navegador, que podia então chamar `supabase.auth.signInWithPassword` diretamente,
+   contornando por completo o bloqueio por tentativas. As duas funções foram removidas; o login
+   passou inteiro para a Edge Function `dm-admin-login` — ver seção "Login do painel" abaixo.
+   Também adiciona `source_ip` em `dm_login_attempts`, para um segundo limite por IP.)
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
 
 ## Login do painel
 
-A Mitsuki e os administradores da TaskZap entram no painel com **usuário + senha**, sem e-mail
-na tela. Por baixo, quem continua validando a senha é o Supabase Auth de verdade — nada de
-checagem de senha em JavaScript ou direto no banco.
+A Mitsuki e os administradores da TaskZap entram no painel com **usuário + senha** (mais o botão
+de mostrar/ocultar senha) — sem e-mail na tela. Por baixo, quem continua validando a senha é o
+Supabase Auth de verdade — nada de checagem de senha em JavaScript ou direto no banco.
 
-Como funciona:
-1. Cada pessoa com acesso ao painel tem uma conta Supabase Auth cujo e-mail é um endereço
-   **interno/sintético** (ex.: `mitsuki@doces-mitsuki.taskzap.internal`), nunca o e-mail pessoal
-   dela — e uma linha em `dm_admin_usernames` associando um "usuário" (ex.: `mitsuki`) a essa
-   conta.
-2. No login, o painel chama `dm_resolve_admin_login(tenant, usuario)`, que devolve o e-mail
-   interno correspondente (ou um erro genérico "usuário ou senha incorretos" se o usuário não
-   existir, sem revelar qual dos dois é o problema).
-3. O painel então chama `supabase.auth.signInWithPassword({ email, password })` normalmente — é
-   o Supabase Auth quem verifica a senha, exatamente como antes.
-4. O resultado (sucesso ou falha) é reportado a `dm_report_login_result`, que grava a tentativa.
-   Depois de 5 falhas em 15 minutos para o mesmo usuário, `dm_resolve_admin_login` passa a
-   recusar novas tentativas (`too_many_attempts`) mesmo com a senha certa, até a janela expirar;
-   um login bem-sucedido limpa esse histórico de falhas na hora.
-5. A checagem de `tenant_memberships` continua exatamente como antes: mesmo com usuário/senha
-   corretos, sem vínculo no tenant o painel nunca é liberado (e o vínculo é revalidado a cada
-   `dm_resolve_admin_login`, não só no login inicial — revogar o vínculo de alguém já impede
-   login novo imediatamente).
+### Por que uma Edge Function, e não uma RPC de banco
 
-Limitação conhecida: como quem valida a senha é o `supabase.auth.signInWithPassword` chamado
-pelo próprio navegador, o e-mail interno resolvido trafega nessa chamada (nunca aparece na tela,
-nunca é digitado, mas tecnicamente passa pela rede até o Supabase). Isso é uma troca deliberada
-para não precisar de uma Edge Function própria nesta V1; pode ser endurecido depois movendo o
-`signInWithPassword` para uma Edge Function que nunca devolve o e-mail ao navegador, se for
-necessário.
+A primeira versão (migração 0006) usava duas RPCs chamáveis pelo navegador: uma resolvia o
+usuário para um e-mail interno, e o navegador então chamava `supabase.auth.signInWithPassword`
+ele mesmo e reportava o resultado de volta para o banco. Uma revisão encontrou dois problemas
+sérios nesse desenho:
 
-Criar o acesso de uma pessoa (feito hoje via SQL pela TaskZap, não pelo painel):
+1. **Resultado informado pelo cliente não é prova de nada.** A RPC de "reportar resultado"
+   aceitava um `success` vindo do navegador. Qualquer pessoa, sem estar logada, podia chamar essa
+   RPC diretamente e mentir: reportar sucesso para limpar o histórico de falhas de qualquer
+   usuário, ou reportar falhas falsas em massa para bloquear um usuário legítimo por força bruta
+   reversa.
+2. **O e-mail resolvido permitia contornar o bloqueio.** Como a RPC de resolução devolvia o
+   e-mail sintético para o navegador, quem tivesse esse e-mail em mãos podia chamar
+   `supabase.auth.signInWithPassword` diretamente pela API do Supabase, sem nunca passar pela
+   nossa RPC — e portanto sem nunca ser contado pelo bloqueio por tentativas.
+
+A correção (migração 0007) elimina as duas RPCs e move o fluxo inteiro para dentro da Edge
+Function `dm-admin-login` (`supabase/functions/dm-admin-login`), que roda com a `service_role`
+— nunca exposta ao navegador:
+
+1. O navegador manda só `{ tenant_slug, username, password }` para a Edge Function.
+2. A função checa, ela mesma, quantas falhas recentes existem para aquele usuário (limite: 5 em
+   15 minutos) e para aquele IP de origem (limite: 20 em 15 minutos, contra tentativas
+   distribuídas entre vários usuários). Se estourou, recusa (`too_many_attempts`) sem sequer
+   consultar a senha.
+3. A função resolve o usuário para o e-mail interno **sem nunca devolver esse e-mail ao
+   navegador**, e chama `supabase.auth.signInWithPassword({ email, password })` ela mesma,
+   servidor-a-servidor. É o Supabase Auth quem segue validando a senha de verdade.
+4. A função observa diretamente a resposta do Supabase Auth (não algo que o navegador afirma) e
+   grava essa tentativa — sucesso ou falha — em `dm_login_attempts`. Um sucesso limpa na hora o
+   histórico de falhas daquele usuário.
+5. Só em caso de sucesso a função devolve os tokens de sessão reais ao navegador, que os aplica
+   com `supabase.auth.setSession(...)`.
+6. A checagem de `tenant_memberships` é feita a cada tentativa (não só no login inicial): revogar
+   o vínculo de alguém barra o próximo login imediatamente, mesmo com usuário/senha corretos.
+
+Como o navegador nunca recebe o e-mail nem fala com o Supabase Auth diretamente, não há mais como
+contornar o bloqueio "por fora" — todo pedido de login passa, obrigatoriamente, pela Edge
+Function.
+
+`dm_login_attempts` não tem nenhuma policy de `INSERT` para `anon`/`authenticated` (só a
+`service_role` da Edge Function escreve nela, e ela ignora RLS por natureza) — mesmo que alguém
+tentasse escrever direto na tabela para forjar sucesso/falha, a política de RLS recusa.
+
+### Proteções nativas do Supabase Auth e Cloudflare Turnstile
+
+O Supabase Auth já aplica seus próprios limites de tentativas de login a nível de projeto — isso
+é uma configuração **global**, compartilhada com Nosso Closet, Donna Store e EB Fit, e não foi
+alterada aqui (mudar isso exigiria avaliar o impacto nos outros clientes, fora do escopo desta
+tarefa). O bloqueio por usuário/IP desta seção é adicional a isso, não um substituto.
+
+A função já tem o ponto de extensão para exigir um token do **Cloudflare Turnstile** antes de
+tentar a senha (`verifyTurnstile`, controlado pelo secret `DM_TURNSTILE_SECRET_KEY` da função) —
+mas nenhum site key/secret do Turnstile foi criado para a Doces Mitsuki ainda, então essa
+checagem fica pulada até alguém configurar o secret. Recomendo ativar isso antes de abrir a loja
+para pedidos reais, se o volume de tentativas de login justificar; não é bloqueante para o V1.
+
+### Recuperação de senha
+
+O e-mail da conta é um endereço interno/sintético — ninguém lê essa caixa de entrada, então o
+fluxo padrão do Supabase ("te mandamos um link por e-mail") não serve aqui. Procedimento adotado:
+**a redefinição de senha é feita por um administrador da TaskZap direto no painel do Supabase**
+(Dashboard → Authentication → Users → selecionar a conta → "Reset password" / definir nova
+senha), nunca pelo próprio painel da loja. Isso é seguro porque só quem já tem acesso ao projeto
+Supabase (equipe TaskZap) consegue fazer isso — não é self-service, e não depende de e-mail
+nenhum. Na prática: se a Mitsuki esquecer a senha, ela avisa a TaskZap (WhatsApp, por exemplo), e
+um administrador troca a senha dela pelo Dashboard.
+
+### Criar o acesso de uma pessoa
+
+Feito hoje via SQL pela TaskZap (não existe tela para isso no painel — é intencional, só quem já
+tem acesso ao Supabase pode criar novos acessos):
 ```sql
--- 1. criar o usuário no Supabase Auth com um e-mail interno (nunca o pessoal)
+-- 1. criar o usuário no Supabase Auth (Dashboard → Authentication → Users → Add user) com um
+--    e-mail interno, nunca o pessoal, ex.: mitsuki@doces-mitsuki.taskzap.internal
 -- 2. vincular ao tenant:
 insert into tenant_memberships (tenant_id, user_id, role) values ('<tenant_id>', '<user_id>', 'owner');
 -- 3. definir o usuário de login:
@@ -187,7 +244,8 @@ Playwright/celular.
 - Advisor de segurança: o achado "anon pode executar `dm_cancel_reservation`" desapareceu;
   nenhum achado novo apareceu.
 
-**Nesta rodada** (migração 0006, login por usuário, sem tocar em `is_active`/`is_open`):
+**Rodada anterior, migração 0006** (desenho substituído pela 0007 logo em seguida — resultados
+mantidos aqui só por histórico, o fluxo testado abaixo não existe mais):
 - Usuário de teste descartável (`auth.users` + `tenant_memberships` + `dm_admin_usernames`),
   removido ao final.
 - `dm_resolve_admin_login` com usuário válido → devolve o e-mail interno correto.
@@ -202,11 +260,53 @@ Playwright/celular.
   recusar mesmo com o usuário existindo (a checagem de vínculo é revalidada a cada tentativa de
   login, não só uma vez).
 
-Não testado (fora do alcance desta sessão): o formulário de login em si no navegador — como
-`signInWithPassword` sempre acaba chamando a API do Supabase Auth pela rede, e este ambiente não
-tem saída de rede até `supabase.co`, não dá para confirmar aqui, pelo navegador, que a senha
-digitada por uma pessoa real é aceita. A lógica de resolução de usuário, bloqueio por tentativas
-e checagem de vínculo — que é a parte nova desta rodada — foi validada como descrito acima.
+**Nesta rodada** (migração 0007 + Edge Function `dm-admin-login`, corrigindo o desenho da 0006;
+sem tocar em `is_active`/`is_open`, sem ativar reservas, sem tocar em dados de outros tenants):
+
+- Confirmado que `dm_resolve_admin_login` e `dm_report_login_result` não existem mais
+  (`function ... does not exist`) — o vetor de vazamento de e-mail e o de "resultado informado
+  pelo cliente" foram removidos, não só neutralizados.
+- **Tentativa de informar sucesso falso**: `insert into dm_login_attempts (..., success=true)`
+  como `anon` → recusado pela RLS (`new row violates row-level security policy`). Sem policy de
+  `INSERT` para `anon`/`authenticated`, só a Edge Function (via `service_role`) escreve na
+  tabela.
+- **Tentativa de bloquear indevidamente outro usuário**: mesmo teste com `success=false` → também
+  recusado pela RLS, pelo mesmo motivo.
+- Usuário de teste descartável (`auth.users` + `tenant_memberships` + `dm_admin_usernames`, senha
+  real via `pgcrypto`/`crypt()` — a mesma função de hash que o Supabase Auth usa), removido ao
+  final:
+  - **Usuário e senha corretos**: reproduzindo exatamente as consultas que a Edge Function faz
+    (usuário → conta, conta → vínculo no tenant, `crypt(senha, encrypted_password) =
+    encrypted_password`) → todas as etapas passam, confirmando que o caminho de sucesso está
+    correto.
+  - **Senha incorreta**: mesma comparação com a senha errada → `false`, como esperado.
+  - **Usuário inexistente**: `select ... from dm_admin_usernames where username = '...'` → vazio,
+    caminho de `invalid_credentials` da função.
+  - **Usuário sem vínculo com o tenant**: removendo a linha de `tenant_memberships` do usuário de
+    teste, a consulta de vínculo que a função faz devolve `false` mesmo com usuário/senha
+    corretos — confirma que a checagem de vínculo continua bloqueando o acesso.
+  - **Bloqueio por tentativas**: inserindo 5 falhas (como a Edge Function faria, via contexto
+    equivalente ao `service_role`) para o mesmo usuário, a contagem que a função usa para decidir
+    o bloqueio (`>= 5 falhas em 15 minutos`) já acusa o limite atingido.
+- **Tentativa de contornar o bloqueio chamando o Supabase Auth diretamente**: não é mais possível
+  pela mesma via da 0006, porque o navegador nunca recebe o e-mail (confirmado por leitura do
+  código da função: a única informação devolvida em caso de sucesso são os tokens de sessão; em
+  caso de erro, só um código genérico). Continua existindo o risco genérico e não específico
+  desta implementação de alguém *adivinhar* o formato do e-mail sintético e tentar autenticar
+  direto contra o Supabase Auth — esse risco é do domínio do Supabase Auth em si (suas próprias
+  proteções globais de tentativas), não algo que esta função possa impedir sem alterar
+  configuração global (fora do escopo aqui, ver seção "Login do painel").
+- Advisor de segurança re-executado: os achados de `dm_resolve_admin_login`/
+  `dm_report_login_result` desapareceram (as funções não existem mais); nenhum achado novo.
+
+Não testado (mesma limitação das rodadas anteriores): o login em si pelo navegador, de ponta a
+ponta contra a Edge Function publicada — este ambiente não tem saída de rede até `supabase.co`
+nem até o domínio das Edge Functions, então não há como fazer uma chamada HTTP real daqui. Toda a
+lógica de que a função depende (consultas, contagens, comparação de senha) foi validada
+diretamente no banco, como descrito acima; falta a confirmação, por uma pessoa com navegador e
+rede reais, de que a tela de login funciona de ponta a ponta e de que o painel carrega
+normalmente depois — recomendo testar em `https://doces-mitsuki.pages.dev/admin/` assim que a
+conta definitiva da Mitsuki existir.
 
 ## Pendências para ativação comercial
 
@@ -223,15 +323,31 @@ e checagem de vínculo — que é a parte nova desta rodada — foi validada com
 5. **Ativação do tenant** (`tenants.is_active=true`): não há política de RLS que permita isso a
    partir do painel — é uma decisão comercial e deve ser feita deliberadamente pela TaskZap fora
    do painel, só depois que os itens acima estiverem resolvidos.
-6. **Cloudflare Pages**: publicação ainda não configurada (ver seção abaixo).
+6. **Teste real do login pelo navegador**: assim que a conta definitiva existir, confirmar em
+   `https://doces-mitsuki.pages.dev/admin/`, de um navegador/celular real, que o login funciona e
+   que o painel carrega — ver "Testes executados" acima para o porquê disso não ter sido possível
+   validar daqui.
+7. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
+   fizer sentido pelo volume esperado — ver seção "Login do painel" acima.
 
 ## Cloudflare Pages
 
-Ainda não publicado. O conector do Cloudflare não está autorizado nesta sessão. Para publicar:
-1. Autorizar o conector do Cloudflare (claude.ai → Configurações → Conectores) ou criar o projeto
-   manualmente no painel do Cloudflare Pages.
-2. Conectar ao repositório `GlebertArantes/Doces-Mitsuki`, branch `main`, sem build command
-   (site estático — diretório raiz).
+**Publicado**: https://doces-mitsuki.pages.dev (feito manualmente, fora desta sessão — o
+conector do Cloudflare não está autorizado aqui, então não tenho como inspecionar ou alterar a
+configuração do projeto Pages diretamente).
+
+A verificar manualmente no painel do Cloudflare Pages (Settings → Builds & deployments):
+- **Production branch = `main`.** O repositório está com `main` e `claude/ecstatic-curie-0kjnzw`
+  sincronizadas no mesmo commit (ver seção "Branches" acima), então qualquer uma serviria hoje —
+  mas o combinado é `main` ser a branch de produção, e é nela que os próximos pushes de deploy
+  vão parar.
+- Nenhum build command / diretório raiz como saída (site estático, sem build step).
+- Variáveis de ambiente: nenhuma necessária — `js/config.js` já traz a URL e a chave publicável
+  do Supabase (públicas por design, seguras com RLS).
+
+A Edge Function `dm-admin-login` está publicada no Supabase (não no Cloudflare) e já aceita
+requisições de `https://doces-mitsuki.pages.dev` e de subdomínios `*.doces-mitsuki.pages.dev`
+(previews) — ver `supabase/functions/dm-admin-login/index.ts`, função `isAllowedOrigin`.
 
 ## Segurança
 

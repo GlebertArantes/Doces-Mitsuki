@@ -23,6 +23,9 @@ function notify(message) {
 const LOGIN_ERROR_MESSAGES = {
   invalid_credentials: 'Usuário ou senha incorretos.',
   too_many_attempts: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.',
+  captcha_failed: 'Não foi possível confirmar que você não é um robô. Tente novamente.',
+  invalid_request: 'Não foi possível entrar. Tente novamente.',
+  origin_not_allowed: 'Acesse pelo endereço oficial da lojinha.',
 };
 
 function renderAuthScreen(errorMessage, submitting) {
@@ -64,19 +67,31 @@ function renderAuthScreen(errorMessage, submitting) {
 }
 
 async function attemptLogin(username, password) {
-  const { data: email, error: resolveError } = await supabase.rpc('dm_resolve_admin_login', {
-    p_tenant_slug: TENANT_SLUG, p_username: username,
+  // Todo o trabalho sensível (resolver o usuário, checar bloqueio por
+  // tentativas, validar a senha no Supabase Auth) acontece dentro da Edge
+  // Function dm-admin-login, do lado do servidor. O navegador nunca recebe
+  // o e-mail da conta nem decide sozinho se o login deu certo.
+  const { data, error } = await supabase.functions.invoke('dm-admin-login', {
+    body: { tenant_slug: TENANT_SLUG, username, password },
   });
-  if (resolveError) {
-    const code = (resolveError.message || '').match(/[a-z_]+/)?.[0];
+
+  if (error) {
+    let code = 'invalid_credentials';
+    try {
+      const errBody = await error.context?.json?.();
+      if (errBody?.error) code = errBody.error;
+    } catch { /* mantém o código genérico se o corpo do erro não puder ser lido */ }
     return renderAuthScreen(LOGIN_ERROR_MESSAGES[code] || 'Não foi possível entrar. Tente novamente.');
   }
 
-  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-  await supabase.rpc('dm_report_login_result', {
-    p_tenant_slug: TENANT_SLUG, p_username: username, p_success: !signInError,
+  if (!data?.access_token || !data?.refresh_token) {
+    return renderAuthScreen(LOGIN_ERROR_MESSAGES.invalid_credentials);
+  }
+
+  const { error: sessionError } = await supabase.auth.setSession({
+    access_token: data.access_token, refresh_token: data.refresh_token,
   });
-  if (signInError) return renderAuthScreen(LOGIN_ERROR_MESSAGES.invalid_credentials);
+  if (sessionError) return renderAuthScreen(LOGIN_ERROR_MESSAGES.invalid_credentials);
   await boot();
 }
 

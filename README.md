@@ -81,6 +81,12 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
    `dm_create_reservation`, de que todo sabor escolhido em "monte sua caixinha" pertence ao
    tenant, tem `kind='flavor'` e está `published` — antes disso era possível, por engano ou de
    propósito, colocar o id de outro produto (inclusive de outro tenant) na seleção de sabores)
+5. `0005_dm_revoke_anon_cancel_reservation.sql` (endurecimento pedido em revisão: revoga
+   `EXECUTE` de `PUBLIC` e de `anon` em `dm_cancel_reservation`, mantendo só `authenticated`.
+   A função já checava `is_tenant_admin`/`is_tenant_owner` internamente — um `anon` nunca
+   conseguia cancelar nada de fato —, mas agora nem chega a entrar na função: recebe
+   `permission denied` antes de qualquer lógica interna rodar. `dm_create_reservation`
+   não foi tocada e continua acessível por `anon`, que é quem precisa reservar sem login.)
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
 
@@ -126,6 +132,15 @@ usuário de teste descartável (`auth.users`/`tenant_memberships`) removido.
 Não testado (fora do alcance desta sessão): o formulário de login em si no navegador (precisa da
 conta real da Mitsuki e de rede até o Supabase, indisponíveis aqui) e o fluxo completo por
 Playwright/celular.
+
+**Nesta rodada** (migração 0005, sem tocar em `is_active`/`is_open`, sem ativar reservas):
+- `has_function_privilege`: `anon` sem EXECUTE em `dm_cancel_reservation`; `authenticated` com
+  EXECUTE; `dm_create_reservation` inalterada (`anon` e `authenticated` continuam podendo).
+- Em runtime, simulando `role anon`: chamar `dm_cancel_reservation` retorna
+  `permission denied for function` (nem entra na função); chamar `dm_create_reservation` chega
+  à lógica interna normalmente e retorna `store_not_published` (tenant seguiu inativo).
+- Advisor de segurança: o achado "anon pode executar `dm_cancel_reservation`" desapareceu;
+  nenhum achado novo apareceu.
 
 ## Pendências para ativação comercial
 

@@ -30,6 +30,17 @@ supabase/seed/demo_catalog.sql  # dados de demonstração (idempotente)
 
 Site estático puro (sem build step): pode ser publicado diretamente no Cloudflare Pages.
 
+## Branches
+
+- `main`: branch de publicação/deploy — é o que o Cloudflare Pages usa como origem.
+- `claude/ecstatic-curie-0kjnzw`: branch de desenvolvimento desta sessão. O repositório estava
+  vazio quando o projeto começou, então o primeiro commit foi enviado só para essa branch, e o
+  GitHub acabou marcando-a como padrão por ser a única existente. `main` foi criada a partir do
+  mesmo commit para corrigir isso; a cada rodada de mudanças, `main` é atualizada a partir da branch de
+  desenvolvimento. Se o GitHub ainda mostrar `claude/ecstatic-curie-0kjnzw` como branch padrão do
+  repositório, troque em Settings → General → Default branch (é uma configuração do repositório,
+  não algo que se resolve só com git push).
+
 ## Backend (Supabase)
 
 Projeto compartilhado da TaskZap: `bydqpemkvljwvuakgcxu`.
@@ -60,6 +71,16 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
 1. `0001_dm_doces_mitsuki_schema.sql`
 2. `0002_dm_doces_mitsuki_security_fix.sql` (corrige 2 achados do advisor de segurança:
    a view de relatório rodando como definer, e a função de trigger exposta como RPC pública)
+3. `0003_dm_fix_reservation_item_order.sql` (corrige bug encontrado em teste: os itens da
+   reserva eram inseridos antes da própria reserva existir, violando a FK)
+4. `0004_dm_admin_tenant_access_and_flavor_validation.sql` (duas correções de uma revisão
+   independente: (a) política de `SELECT` em `tenants` que deixa um membro autenticado do
+   tenant ver sua própria loja mesmo com `is_active=false` — sem isso o painel nunca conseguia
+   carregar antes da ativação comercial; outros tenants continuam invisíveis, e um usuário sem
+   vínculo continua sem ver a loja inativa; (b) validação explícita, dentro de
+   `dm_create_reservation`, de que todo sabor escolhido em "monte sua caixinha" pertence ao
+   tenant, tem `kind='flavor'` e está `published` — antes disso era possível, por engano ou de
+   propósito, colocar o id de outro produto (inclusive de outro tenant) na seleção de sabores)
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
 
@@ -73,7 +94,38 @@ npx serve .
 
 Abra `/` para a vitrine e `/admin/` para o painel. Como o tenant está `is_active=false`, a
 vitrine pública mostrará "Em breve" até a ativação — isso é esperado e é o comportamento de
-segurança correto.
+segurança correto. O painel (`/admin/`), por outro lado, funciona normalmente mesmo com
+`is_active=false` para quem tiver uma conta vinculada ao tenant (ver migração 0004).
+
+## Testes executados (procedimento controlado)
+
+Este ambiente não tem saída de rede para `supabase.co` nem para o CDN do supabase-js, então os
+testes abaixo foram feitos diretamente no banco (via SQL, simulando os papéis `anon` e
+`authenticated`), não pelo navegador. Todos usaram dados fictícios isolados no tenant
+`doces-mitsuki` e foram revertidos ao final: tenant de volta para `is_active=false`, loja para
+`is_open=false`, estoque restaurado aos valores originais, reservas de teste apagadas, e o
+usuário de teste descartável (`auth.users`/`tenant_memberships`) removido.
+
+- Reserva simples (caixinha pronta), idempotência (mesma chave não duplica nem decrementa
+  estoque duas vezes), caixinha montada com sabor repetido, geração de código `DM-AAMMDD-NNN`.
+- Estoque insuficiente rejeitado com rollback total (nenhuma reserva parcial fica registrada).
+- Corrida por última unidade: dois pedidos concorrentes pela mesma unidade não permitem
+  sobrevenda.
+- **Novo nesta rodada**: seleção de sabor de outro tenant → rejeitada (`invalid_flavor_selection`).
+- **Novo nesta rodada**: "kind confusion" — usar o id da própria caixinha pronta como se fosse
+  sabor avulso → rejeitada, e confirmado que o estoque da caixinha pronta não foi tocado (esse
+  era exatamente o bug real corrigido na migração 0004).
+- **Novo nesta rodada**: id de sabor inexistente (UUID aleatório) → rejeitado.
+- **Novo nesta rodada**: montagem de caixinha válida (regressão) → continua funcionando após a
+  correção.
+- **Novo nesta rodada**: acesso ao painel com `is_active=false` — um usuário de teste descartável
+  com vínculo (`tenant_memberships`) no tenant consegue ver a linha de `tenants` (o que o
+  `admin.js` precisa para depois checar o vínculo); um usuário autenticado sem nenhum vínculo
+  continua sem ver a loja inativa; nenhum outro tenant fica exposto.
+
+Não testado (fora do alcance desta sessão): o formulário de login em si no navegador (precisa da
+conta real da Mitsuki e de rede até o Supabase, indisponíveis aqui) e o fluxo completo por
+Playwright/celular.
 
 ## Pendências para ativação comercial
 

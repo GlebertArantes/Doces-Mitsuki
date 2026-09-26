@@ -260,6 +260,7 @@ async function confirmReservation(form) {
       empty_cart: 'Seu carrinho está vazio.',
       customer_name_required: 'Informe seu nome para reservar.',
       invalid_box_composition: 'Selecione todos os sabores da caixinha.',
+      invalid_flavor_selection: 'Um dos sabores escolhidos não é válido. Atualize a página e tente novamente.',
     };
     const code = (error.message || '').match(/[a-z_]+/)?.[0];
     notify(map[code] || 'Não foi possível registrar sua reserva. Tente novamente.');

@@ -1,17 +1,32 @@
-# Doces Mitsuki 🍬
+# NK Doces 🍬
 
-Loja mobile da Doces Mitsuki (TaskZap): caixinhas prontas, monte sua caixinha (4 docinhos) e avulsos.
-Retirada com a Mitsuki na Brago; pagamento Pix com conferência manual.
+Loja mobile da NK Doces (nome comercial; tenant técnico continua `doces-mitsuki`), da TaskZap:
+caixinhas prontas, monte sua caixinha (4 docinhos) e avulsos. Retirada com a Mitsuki na Brago;
+pagamento Pix com conferência manual.
 
 ## Estado do projeto
 
-**V1 conectada ao Supabase compartilhado da TaskZap, ainda NÃO publicada para pedidos reais.**
-O tenant `doces-mitsuki` está com `is_active=false`: o cardápio não é visível publicamente e
-o RPC de reserva recusa qualquer pedido até a ativação (`store_not_published`). A loja também
-começa com "pronta entrega" fechada (`dm_store_status.is_open=false`).
+**Estado atual no Supabase (definido pela TaskZap/cliente, fora desta sessão — não alterado aqui):**
+`tenants.is_active = true` (nome comercial já é **NK Doces** no banco) e
+`dm_store_status.is_open = false` (reservas **fechadas**: o cardápio pode ser visto, mas o RPC de
+reserva ainda recusa qualquer pedido até a Mitsuki reabrir as vendas). Esta sessão não altera
+`is_active`, `is_open`, dados de pagamento nem estoque por conta própria.
 
 Preços e sabores seguem os valores de demonstração do protótipo V3 aprovado, marcados como
 `[DEMO]` na descrição — ainda pendentes de confirmação com a Mitsuki.
+
+## Identidade comercial: NK Doces
+
+O nome comercial da loja é **NK Doces** — usado em todo texto visível ao cliente (cabeçalho,
+rodapé, títulos de página, metadados, recibo, mensagem do WhatsApp). O nome **"Mitsuki"**
+continua usado sempre que o texto se refere à pessoa (ex.: "Oi, eu sou a Mitsuki!", "Retirada com
+a Mitsuki"). Nada técnico mudou por causa do rebranding: slug do tenant (`doces-mitsuki`),
+`tenant_id`, prefixo de pedido (`DM`), usuário de login (`mitsuki`), nomes de tabela/função/
+migração, domínio de publicação (`doces-mitsuki.pages.dev`) e o repositório continuam exatamente
+como antes — só textos comerciais/visíveis foram trocados.
+
+O monograma circular (`.seal`) passou de "m" para "NK" (mesmo componente visual, sem redesenho:
+só o texto e o tamanho da fonte, para caber duas letras no mesmo círculo).
 
 ## Layout mobile (overflow horizontal) e nomenclatura "cliente"
 
@@ -52,7 +67,7 @@ continua mencionada como informação de local de retirada, não como vínculo e
 index.html          # vitrine (loja)
 admin/index.html     # painel administrativo (Supabase Auth)
 css/styles.css        # identidade visual da V3 aprovada (preservada)
-js/config.js          # URL + chave publicável do Supabase (pública, segura com RLS)
+js/config.js          # URL + chave publicável do Supabase + número do WhatsApp (pública, RLS)
 js/supabase-client.js
 js/store.js            # lógica da vitrine, carrinho, checkout
 js/admin.js             # lógica do painel (login por usuário via Edge Function)
@@ -103,6 +118,36 @@ catálogo carrega (5 produtos), filtro funciona, montar caixinha com 4 sabores h
 simulação com o aviso de demonstração — sem overflow horizontal em nenhuma largura, e **zero
 requisições de rede para `supabase.co` ou `esm.sh`** (monitorado via interceptação de todas as
 requisições da página durante o teste, não só leitura de código).
+
+## Envio do pedido pelo WhatsApp
+
+Depois que a reserva é gravada com sucesso no Supabase (via `dm_create_reservation`), a tela de
+confirmação mostra um botão primário **"📲 Enviar pedido pelo WhatsApp"** que abre uma conversa já
+preenchida com a Mitsuki, usando o link oficial "click-to-chat" do WhatsApp
+(`https://wa.me/<número>?text=<mensagem>`). **Não há API do WhatsApp Business, nem biblioteca de
+automação, nem envio automático** — o cliente ainda precisa tocar em "Enviar" dentro do próprio
+WhatsApp.
+
+- **Número autorizado da Mitsuki**: `+55 34 98438-8989`, normalizado como `5534984388989` para o
+  link `wa.me`. Configurado num único ponto: `WHATSAPP_NUMBER` em `js/config.js`. Não é
+  reaproveitado de nenhum outro projeto da TaskZap (Donna Store, Nosso Closet, EB Fit).
+- **Mensagem**: montada em `buildWhatsAppMessage()` (`js/store.js`), só com dados reais devolvidos
+  pela RPC (`order_code`, `total_cents`) e o carrinho que gerou a reserva (nomes de produto,
+  quantidades, sabores). Sabores repetidos numa "monte sua caixinha" são agrupados (ex.: `2x
+  Brigadeiro tradicional, 2x Beijinho`) para ficar legível sem inventar plural gramatical
+  incerto. Nenhum ID interno, token ou e-mail técnico aparece na mensagem.
+- **Sem duplicação de pedido**: o botão do WhatsApp só abre um link — ele nunca chama
+  `dm_create_reservation` (nem qualquer outra RPC) de novo. Clicar várias vezes reabre a mesma
+  conversa com a mesma mensagem; nenhum estoque é decrementado nem código novo é gerado por causa
+  do botão.
+- **Gating**: o botão só existe dentro do modal de confirmação, que só é renderizado depois que a
+  RPC devolve sucesso — se a reserva falhar, nenhum botão de WhatsApp aparece.
+- **Botão secundário "📋 Copiar mensagem"**: copia o mesmo texto pra área de transferência
+  (`navigator.clipboard`), com aviso de erro se o navegador recusar — é o caminho alternativo caso
+  o WhatsApp não abra automaticamente (bloqueio de pop-up, app não instalado no desktop etc.).
+- **Prévia de demonstração (`/demo/`)**: mostra o mesmo botão, mas **desabilitado**, com uma frase
+  explicando que o envio real só existe na loja publicada — a demo nunca abre o WhatsApp de
+  verdade nem gera uma mensagem com número real, consistente com seu isolamento total do Supabase.
 
 ## Branches
 
@@ -524,25 +569,82 @@ Chromium real, num servidor HTTP local:
 Os arquivos de teste (módulo substituto do Supabase, scripts Playwright, capturas de tela) foram
 usados só localmente nesta sessão e não foram commitados — não fazem parte do app.
 
+**Nesta rodada** (rebranding para NK Doces + envio de pedido pelo WhatsApp — sem tocar em
+`is_active`/`is_open`, sem registrar pedido real, sem tocar em dados de outros tenants):
+
+Mesmo procedimento das rodadas anteriores: servidor HTTP local + Chromium real via Playwright,
+com o módulo `supabase-client.js` interceptado e substituído por um mock em memória (sem nenhuma
+chamada real a `supabase.co`), já que este ambiente não tem saída de rede para lá. 55 verificações
+automatizadas, todas aprovadas:
+
+- **Rebranding**: `grep` em todos os arquivos visíveis ao cliente (`index.html`, `admin/index.html`,
+  `demo/index.html`, `js/store.js`, `js/admin.js`, `demo/js/demo-store.js`) confirma **zero**
+  ocorrências de "Doces Mitsuki"/"DOCES MITSUKI" restantes; título, `brand-name`, `demo-strip` e
+  monograma (`.seal`, agora "NK") verificados em tela real na vitrine, no painel e na prévia. A
+  seção "Oi, eu sou a Mitsuki!" (nome da pessoa) continua intacta, como deveria.
+- **Terminologia**: campo do checkout confirmado como "Referência para retirada (opcional)" (era
+  "Setor / equipe (opcional)"), na vitrine real e na prévia; `grep` confirma zero ocorrências novas
+  de "funcionári"/"colaborador"/"empregad".
+- **Fluxo completo de reserva + WhatsApp**: carrinho com 2x caixinha pronta + 1x caixinha montada
+  (sabores propositalmente repetidos: 2x Brigadeiro, 1x Beijinho, 1x Ninho) → `dm_create_reservation`
+  chamada **exatamente uma vez** → botão "📲 Enviar pedido pelo WhatsApp" aparece só depois do
+  sucesso da RPC, com `href` `https://wa.me/5534984388989?text=...` (número correto, formato
+  oficial). Mensagem decodificada conferida linha a linha contra o template pedido: cabeçalho,
+  código de pedido **real** (`#DM-260928-007`, devolvido pela RPC simulada), nome do cliente, itens
+  com subtotal correto, sabores repetidos agrupados como `2x Brigadeiro tradicional` (formato
+  `NxNome`, escolhido para não arriscar plural gramaticalmente errado em nomes de produto
+  arbitrários), total batendo com `total_cents` da RPC, retirada, status de pagamento e observação
+  — e **nenhum ID interno de produto** (`prod-*`) vazando no texto.
+- **Sem duplicação**: clicar no botão do WhatsApp duas vezes seguidas (incluindo abrir e fechar a
+  aba que o `target="_blank"` tentaria abrir) confirmado, por contagem de chamadas RPC
+  interceptadas, que **não** dispara uma nova `dm_create_reservation` — o botão é só um link
+  estático montado uma vez.
+- **Botão "Copiar mensagem"**: clicado, e o conteúdo da área de transferência (mockada via
+  permissão do Chromium) conferido como sendo o mesmo texto do link do WhatsApp.
+- **Falha de reserva**: RPC simulada devolvendo `insufficient_stock` → confirmado que **nenhum**
+  botão de WhatsApp nem tela de sucesso aparece, e que um aviso de erro é mostrado ao cliente.
+- **Prévia de demonstração**: confirmado que o botão do WhatsApp aparece **desabilitado**
+  (`disabled`), com o texto explicando que o envio real só existe na loja publicada; confirmado que
+  a página não referencia `js/config.js` nem `js/supabase-client.js` no HTML servido; monitorando
+  **todas** as requisições de rede da aba (não só as de Supabase), zero saíram para fora de
+  `localhost:8080` — ou seja, nenhuma chamada de rede de espécie nenhuma, consistente com o
+  isolamento total exigido.
+- **Layout mobile**: 320/360/375/390/430px + desktop (1280px), nas três páginas (vitrine, painel,
+  prévia) — `document.documentElement.scrollWidth` igual a `window.innerWidth` em todos os 18
+  casos, zero overflow horizontal após as mudanças de texto/monograma desta rodada.
+
+**Não testado nesta rodada** (mesma limitação de rede das rodadas anteriores, não simulado como se
+fosse produção):
+- O round-trip real contra o Supabase publicado (`dm_create_reservation` de verdade, gerando um
+  `order_code` genuíno) — os testes acima usam uma RPC simulada que devolve um código fixo, não uma
+  reserva real gravada no banco. Recomendo um teste real, com autorização explícita, quando a
+  primeira reserva de teste puder ser feita.
+- Abrir o link `wa.me` de fato num WhatsApp instalado (Android/iPhone/desktop) e confirmar que a
+  conversa abre com o texto certo já preenchido — testado aqui só até a construção do link e da
+  mensagem (comportamento do próprio app WhatsApp ao interpretar o link não pôde ser observado
+  sem um dispositivo real).
+- As páginas publicadas de verdade em `https://doces-mitsuki.pages.dev` (incluindo `/demo/`) — este
+  ambiente não tem saída de rede até `*.pages.dev`, então tudo acima rodou contra uma cópia local
+  dos mesmos arquivos, servida por um HTTP server próprio, não contra o deploy real.
+
 ## Pendências para ativação comercial
 
-1. **Conta de administração da Mitsuki**: ainda **não criada**, conforme pedido. Quando for
-   criada, o e-mail da conta deve ser um endereço **aleatório/opaco** (ex.: um UUID
-   `@doces-mitsuki-auth.invalid`), **não** um padrão previsível a partir do usuário — ver seção
-   "Login do painel" acima (subseção "Criar o acesso de uma pessoa") para o passo a passo completo
-   e o porquê de evitar um padrão previsível.
+1. ~~Conta de administração da Mitsuki~~ — **já existe** (`dm_admin_usernames`, username
+   `mitsuki`, 1 conta vinculada ao tenant). Nada a fazer aqui; não recriar nem redefinir a senha
+   sem pedido explícito.
 2. **Confirmação comercial**: preços reais, sabores definitivos, chave Pix.
 3. **Autorização de imagem**: o retrato da Mitsuki usado hoje é um monograma ilustrativo (não é
    uma foto real da proprietária). Substituir só após autorização explícita dela.
 4. **Fotos reais dos produtos**: as imagens atuais são ilustrativas (herdadas do protótipo V3),
    não fotografias dos doces realmente vendidos.
-5. **Ativação do tenant** (`tenants.is_active=true`): não há política de RLS que permita isso a
-   partir do painel — é uma decisão comercial e deve ser feita deliberadamente pela TaskZap fora
-   do painel, só depois que os itens acima estiverem resolvidos.
-6. **Teste real do login pelo navegador**: assim que a conta definitiva existir, confirmar em
-   `https://doces-mitsuki.pages.dev/admin/`, de um navegador/celular real, que o login funciona e
-   que o painel carrega — ver "Testes executados" acima para o porquê disso não ter sido possível
-   validar daqui.
+5. **Reabertura das reservas** (`dm_store_status.is_open=true`): decisão comercial da Mitsuki/
+   TaskZap, feita deliberadamente fora desta sessão, só depois que os itens acima estiverem
+   resolvidos e o primeiro teste real autorizado.
+6. **Teste real do login e do fluxo de WhatsApp pelo navegador**: confirmar em
+   `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um navegador/celular real,
+   que o login funciona, que uma reserva real é criada e que o botão do WhatsApp abre a conversa
+   corretamente — ver "Testes executados" acima para o porquê disso não ter sido possível validar
+   diretamente desta sessão (sem saída de rede para `supabase.co`/`*.pages.dev`).
 7. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
    fizer sentido pelo volume esperado — ver seção "Login do painel" acima.
 
@@ -564,8 +666,16 @@ manualmente no painel do Cloudflare Pages:
    mostrar um commit mais antigo como "Production", o deploy automático não disparou — nesse caso,
    um "Retry deployment" ou um novo push vazio resolve.
 3. Nenhum build command / diretório raiz como saída (site estático, sem build step).
-4. Variáveis de ambiente: nenhuma necessária — `js/config.js` já traz a URL e a chave publicável
-   do Supabase (públicas por design, seguras com RLS).
+4. **Verificar se a pasta `demo/` está incluída no deploy**: como não há build step, o Cloudflare
+   Pages publica todo o conteúdo do repositório a partir da raiz por padrão — então `demo/` (e
+   `index.html`, `admin/`, `css/`, `js/`, `assets/`) deveriam aparecer automaticamente em
+   `https://doces-mitsuki.pages.dev/demo/` sem nenhuma configuração extra, **desde que "Build
+   output directory" esteja vazio ou como `/`** (Settings → Builds & deployments). Se
+   `https://doces-mitsuki.pages.dev/demo/` retornar 404 depois do próximo deploy, o ajuste é trocar
+   "Build output directory" para `/` (raiz) nesse mesmo painel — não consigo verificar isso
+   programaticamente sem o conector do Cloudflare autorizado nesta sessão (ver item abaixo).
+5. Variáveis de ambiente: nenhuma necessária — `js/config.js` já traz a URL, a chave publicável
+   do Supabase e o número do WhatsApp (públicos por design; a chave é segura com RLS).
 
 A Edge Function `dm-admin-login` está publicada no Supabase (não no Cloudflare) e já aceita
 requisições de `https://doces-mitsuki.pages.dev` e de subdomínios `*.doces-mitsuki.pages.dev`

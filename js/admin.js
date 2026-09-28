@@ -34,7 +34,7 @@ function renderAuthScreen(errorMessage, submitting) {
   $('auth-view').classList.remove('hidden');
   $('auth-view').innerHTML = `
     <div class="auth-screen">
-      <div class="brand" style="justify-content:center"><div class="seal" aria-hidden="true">m</div><div><div class="brand-name">Doces Mitsuki</div><div class="brand-tag">painel administrativo</div></div></div>
+      <div class="brand" style="justify-content:center"><div class="seal" aria-hidden="true">NK</div><div><div class="brand-name">NK Doces</div><div class="brand-tag">painel administrativo</div></div></div>
       <h1>Entrar</h1>
       <p>Acesso restrito à Mitsuki e a administradores autorizados da TaskZap.</p>
       <form id="login-form">
@@ -102,13 +102,13 @@ async function boot() {
   if (!session) return renderAuthScreen();
 
   const { data: tenantRow } = await supabase.from('tenants').select('id, slug, name, is_active, order_code_prefix').eq('slug', TENANT_SLUG).maybeSingle();
-  if (!tenantRow) return renderAuthScreen('Tenant Doces Mitsuki não encontrado.');
+  if (!tenantRow) return renderAuthScreen('Tenant NK Doces não encontrado.');
   tenant = tenantRow;
 
   const { data: membership } = await supabase.from('tenant_memberships').select('role').eq('tenant_id', tenant.id).eq('user_id', session.user.id).maybeSingle();
   if (!membership) {
     await supabase.auth.signOut();
-    return renderAuthScreen('Sua conta não tem acesso ao painel da Doces Mitsuki. Peça a um administrador da TaskZap para vincular seu usuário.');
+    return renderAuthScreen('Sua conta não tem acesso ao painel da NK Doces. Peça a um administrador da TaskZap para vincular seu usuário.');
   }
 
   $('auth-view').classList.add('hidden');

@@ -1,5 +1,5 @@
 import { supabase } from './supabase-client.js';
-import { TENANT_SLUG } from './config.js';
+import { TENANT_SLUG, WHATSAPP_NUMBER } from './config.js';
 
 const $ = id => document.getElementById(id);
 const money = n => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -28,6 +28,7 @@ let builderSlots = 4;
 let builderBoxProduct = null;
 let activeSlot = 0;
 let lastReservation = null;
+let lastWhatsAppMessage = '';
 let toastHandle;
 
 const CART_KEY = 'doces_mitsuki_cart_v1';
@@ -109,12 +110,12 @@ async function loadData() {
 
 function renderUnavailable() {
   $('store-status').classList.remove('closed');
-  $('store-status').innerHTML = '<div><strong>Em breve ♡</strong><p>A lojinha da Doces Mitsuki ainda está em preparação. Volte em breve!</p></div>';
+  $('store-status').innerHTML = '<div><strong>Em breve ♡</strong><p>A lojinha da NK Doces ainda está em preparação. Volte em breve!</p></div>';
   $('pickup-wrap').classList.add('hidden');
   $('products').innerHTML = '';
   $('items-pill').textContent = '';
   $('quiet-note').textContent = '';
-  $('demo-strip').textContent = '✦ DOCES MITSUKI · EM BREVE ✦';
+  $('demo-strip').textContent = '✦ NK DOCES · EM BREVE ✦';
 }
 
 function flavorList() { return products.filter(p => p.kind === 'flavor'); }
@@ -215,7 +216,7 @@ function showCart() {
 
 function checkout() {
   if (!cart.length) return closeModal();
-  openModal(sheetTitle('Finalizar reserva ♡') + `<p class="extra">Preencha seus dados para que a Mitsuki identifique seu pedido na retirada.</p><form id="checkout-form"><label class="field">Seu nome *<input name="customer" required maxlength="60" placeholder="Ex.: Glebert" autocomplete="name"></label><label class="field">Setor / equipe (opcional)<input name="sector" maxlength="60" placeholder="Ex.: Administrativo"></label><label class="field">Observação (opcional)<textarea name="note" maxlength="160" placeholder="Ex.: vou buscar no intervalo"></textarea></label><div class="pick-box"><strong style="font-size:12px">📍 Retirada com a Mitsuki</strong><p class="extra" style="margin:6px 0 0">${esc(storeStatus.pickup_instructions)}</p></div><div class="pick-box"><strong style="font-size:12px">💠 Pagamento: Pix</strong><p class="extra" style="margin:6px 0 0">${storeStatus.pix_key ? 'Você poderá copiar a chave Pix na confirmação.' : 'Chave Pix ainda não cadastrada. Combine o pagamento diretamente com a Mitsuki.'}</p></div><div class="sumline"><span>Total</span><strong>${money(cartTotal())}</strong></div><div class="notice">O pagamento não é verificado automaticamente. A Mitsuki confirma o recebimento no painel.</div><button class="button full" type="submit">Confirmar reserva</button></form>`);
+  openModal(sheetTitle('Finalizar reserva ♡') + `<p class="extra">Preencha seus dados para que a Mitsuki identifique seu pedido na retirada.</p><form id="checkout-form"><label class="field">Seu nome *<input name="customer" required maxlength="60" placeholder="Ex.: Glebert" autocomplete="name"></label><label class="field">Referência para retirada (opcional)<input name="sector" maxlength="60" placeholder="Ex.: Administrativo"></label><label class="field">Observação (opcional)<textarea name="note" maxlength="160" placeholder="Ex.: vou buscar no intervalo"></textarea></label><div class="pick-box"><strong style="font-size:12px">📍 Retirada com a Mitsuki</strong><p class="extra" style="margin:6px 0 0">${esc(storeStatus.pickup_instructions)}</p></div><div class="pick-box"><strong style="font-size:12px">💠 Pagamento: Pix</strong><p class="extra" style="margin:6px 0 0">${storeStatus.pix_key ? 'Você poderá copiar a chave Pix na confirmação.' : 'Chave Pix ainda não cadastrada. Combine o pagamento diretamente com a Mitsuki.'}</p></div><div class="sumline"><span>Total</span><strong>${money(cartTotal())}</strong></div><div class="notice">O pagamento não é verificado automaticamente. A Mitsuki confirma o recebimento no painel.</div><button class="button full" type="submit">Confirmar reserva</button></form>`);
 }
 
 let submitting = false;
@@ -271,23 +272,54 @@ async function confirmReservation(form) {
 
   const result = Array.isArray(data) ? data[0] : data;
   lastReservation = result;
+  const cartSnapshot = cart.map(i => ({ ...i }));
   sessionStorage.removeItem('dm_pending_idem');
   cart = [];
   persistCart();
   await loadData();
 
   const receiptLines = [
-    'DOCES MITSUKI · RESERVA',
+    'NK DOCES · RESERVA',
     'Pedido #' + result.order_code,
     'Nome: ' + customer,
-    sector ? 'Setor: ' + sector : null,
+    sector ? 'Referência: ' + sector : null,
     'Total: ' + money(result.total_cents / 100),
     'Retirada: ' + storeStatus.pickup_instructions,
     'Pagamento: Pix · aguardando confirmação',
     note ? 'Observação: ' + note : null,
   ].filter(Boolean).join('\n');
 
-  openModal(sheetTitle('Reserva registrada ♡') + `<div class="confirm-head"><div class="confirm-icon">🎀</div><h2>Seu docinho está reservado!</h2><p>Pedido <b>#${esc(result.order_code)}</b> registrado. Mostre esta tela para a Mitsuki na retirada.</p></div><div class="receipt">${esc(receiptLines)}</div>${storeStatus.pix_key ? `<div class="pick-box"><strong style="font-size:12px">Chave Pix</strong><p style="overflow-wrap:anywhere;font-size:12px;color:#795969;margin:9px 0">${esc(storeStatus.pix_key)}</p></div>` : '<div class="notice">A chave Pix ainda não foi cadastrada. O pagamento será combinado diretamente com a Mitsuki.</div>'}<button class="button ghost full" data-close>Voltar para a lojinha</button>`);
+  lastWhatsAppMessage = buildWhatsAppMessage(result, customer, cartSnapshot, note);
+  const waLink = 'https://wa.me/' + WHATSAPP_NUMBER + '?text=' + encodeURIComponent(lastWhatsAppMessage);
+
+  openModal(sheetTitle('Reserva registrada ♡') + `<div class="confirm-head"><div class="confirm-icon">🎀</div><h2>Seu docinho está reservado!</h2><p>Pedido <b>#${esc(result.order_code)}</b> registrado. Mostre esta tela para a Mitsuki na retirada.</p></div><div class="receipt">${esc(receiptLines)}</div>${storeStatus.pix_key ? `<div class="pick-box"><strong style="font-size:12px">Chave Pix</strong><p style="overflow-wrap:anywhere;font-size:12px;color:#795969;margin:9px 0">${esc(storeStatus.pix_key)}</p></div>` : '<div class="notice">A chave Pix ainda não foi cadastrada. O pagamento será combinado diretamente com a Mitsuki.</div>'}<div class="confirm-actions"><a class="button full whatsapp" href="${esc(waLink)}" target="_blank" rel="noopener noreferrer" id="wa-send-btn">📲 Enviar pedido pelo WhatsApp</a><button class="button full ghost" type="button" id="copy-whatsapp-msg">📋 Copiar mensagem</button></div><p class="confirm-help">Seu pedido já foi registrado! Toque no botão acima para abrir o WhatsApp da Mitsuki com a mensagem pronta — você ainda precisa tocar em "Enviar" dentro do próprio WhatsApp. Se ele não abrir automaticamente, use "Copiar mensagem" e cole na conversa.</p><button class="button ghost full" data-close>Voltar para a lojinha</button>`);
+}
+
+function buildWhatsAppMessage(result, customer, cartSnapshot, note) {
+  const lines = ['🍬 *NK DOCES — NOVO PEDIDO*', '', '*Pedido:* #' + result.order_code, '*Cliente:* ' + customer, '', '*ITENS*'];
+  for (const i of cartSnapshot) {
+    if (i.kind === 'buildable_box') {
+      const counts = new Map();
+      for (const fid of i.flavors) {
+        const name = products.find(p => p.id === fid)?.name || 'Sabor';
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+      const flavorText = [...counts.entries()].map(([name, n]) => n + 'x ' + name).join(', ');
+      lines.push('- ' + i.qty + 'x ' + i.boxName);
+      lines.push('  Sabores: ' + flavorText);
+      lines.push('  Subtotal: ' + money(i.qty * i.price));
+    } else {
+      lines.push('- ' + i.qty + 'x ' + i.name);
+      lines.push('  Subtotal: ' + money(i.qty * i.price));
+    }
+    lines.push('');
+  }
+  lines.push('*TOTAL:* ' + money(result.total_cents / 100));
+  lines.push('');
+  lines.push('*Retirada:* ' + storeStatus.pickup_instructions);
+  lines.push('*Pagamento:* aguardando confirmação');
+  if (note) { lines.push(''); lines.push('*Observação:* ' + note); }
+  return lines.join('\n');
 }
 
 function changeCart(key, delta) {
@@ -327,6 +359,17 @@ document.addEventListener('click', e => {
   if (b.dataset.cartDown !== undefined) return changeCart(b.dataset.cartDown, -1);
   if (b.dataset.cartUp !== undefined) return changeCart(b.dataset.cartUp, 1);
   if (b.id === 'go-checkout') return checkout();
+  if (b.id === 'copy-whatsapp-msg') {
+    if (!lastWhatsAppMessage) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(lastWhatsAppMessage)
+        .then(() => notify('Mensagem copiada! Cole na conversa do WhatsApp.'))
+        .catch(() => notify('Não foi possível copiar. Selecione o texto manualmente.'));
+    } else {
+      notify('Não foi possível copiar automaticamente. Selecione o texto manualmente.');
+    }
+    return;
+  }
 });
 
 document.addEventListener('submit', e => {

@@ -183,7 +183,7 @@ function showCart() {
 
 function checkout() {
   if (!cart.length) return closeModal();
-  openModal(sheetTitle('Finalizar reserva (demo) ♡') + `<p class="extra">Formulário de demonstração — os dados preenchidos aqui não são enviados a lugar nenhum.</p><form id="checkout-form"><label class="field">Seu nome *<input name="customer" required maxlength="60" placeholder="Ex.: Glebert" autocomplete="name"></label><label class="field">Setor / equipe (opcional)<input name="sector" maxlength="60" placeholder="Ex.: Administrativo"></label><label class="field">Observação (opcional)<textarea name="note" maxlength="160" placeholder="Ex.: vou buscar no intervalo"></textarea></label><div class="pick-box"><strong style="font-size:12px">📍 Retirada com a Mitsuki</strong><p class="extra" style="margin:6px 0 0">${esc(storeStatus.pickup_instructions)}</p></div><div class="pick-box"><strong style="font-size:12px">💠 Pagamento: Pix</strong><p class="extra" style="margin:6px 0 0">Demonstração — nenhum pagamento é processado.</p></div><div class="sumline"><span>Total</span><strong>${money(cartTotal())}</strong></div><div class="notice">🧪 DEMONSTRAÇÃO — nenhum pedido será registrado. Nada aqui chega ao banco de dados real da loja.</div><button class="button full" type="submit">Simular confirmação</button></form>`);
+  openModal(sheetTitle('Finalizar reserva (demo) ♡') + `<p class="extra">Formulário de demonstração — os dados preenchidos aqui não são enviados a lugar nenhum.</p><form id="checkout-form"><label class="field">Seu nome *<input name="customer" required maxlength="60" placeholder="Ex.: Glebert" autocomplete="name"></label><label class="field">Referência para retirada (opcional)<input name="sector" maxlength="60" placeholder="Ex.: Administrativo"></label><label class="field">Observação (opcional)<textarea name="note" maxlength="160" placeholder="Ex.: vou buscar no intervalo"></textarea></label><div class="pick-box"><strong style="font-size:12px">📍 Retirada com a Mitsuki</strong><p class="extra" style="margin:6px 0 0">${esc(storeStatus.pickup_instructions)}</p></div><div class="pick-box"><strong style="font-size:12px">💠 Pagamento: Pix</strong><p class="extra" style="margin:6px 0 0">Demonstração — nenhum pagamento é processado.</p></div><div class="sumline"><span>Total</span><strong>${money(cartTotal())}</strong></div><div class="notice">🧪 DEMONSTRAÇÃO — nenhum pedido será registrado. Nada aqui chega ao banco de dados real da loja.</div><button class="button full" type="submit">Simular confirmação</button></form>`);
 }
 
 function confirmReservationDemo(form) {
@@ -210,10 +210,10 @@ function confirmReservationDemo(form) {
   render();
 
   const receiptLines = [
-    'DOCES MITSUKI · SIMULAÇÃO DE RESERVA',
+    'NK DOCES · SIMULAÇÃO DE RESERVA',
     'Pedido #' + orderCode + ' (demonstração, não é um pedido real)',
     'Nome: ' + customer,
-    sector ? 'Setor: ' + sector : null,
+    sector ? 'Referência: ' + sector : null,
     'Total: ' + money(total),
     'Retirada: ' + storeStatus.pickup_instructions,
     note ? 'Observação: ' + note : null,
@@ -221,7 +221,7 @@ function confirmReservationDemo(form) {
     'Este pedido NÃO foi enviado à Mitsuki nem gravado em nenhum banco de dados.',
   ].filter(Boolean).join('\n');
 
-  openModal(sheetTitle('Simulação registrada ♡') + `<div class="confirm-head"><div class="confirm-icon">🧪</div><h2>Demonstração concluída!</h2><p>Código de exemplo <b>#${esc(orderCode)}</b>. Isto é uma simulação — nenhum pedido real foi criado.</p></div><div class="receipt">${esc(receiptLines)}</div><div class="notice">DEMONSTRAÇÃO — nenhum pedido foi registrado. Nada foi salvo no banco de dados da Doces Mitsuki.</div><button class="button ghost full" data-close>Voltar para a prévia</button>`);
+  openModal(sheetTitle('Simulação registrada ♡') + `<div class="confirm-head"><div class="confirm-icon">🧪</div><h2>Demonstração concluída!</h2><p>Código de exemplo <b>#${esc(orderCode)}</b>. Isto é uma simulação — nenhum pedido real foi criado.</p></div><div class="receipt">${esc(receiptLines)}</div><div class="notice">DEMONSTRAÇÃO — nenhum pedido foi registrado. Nada foi salvo no banco de dados da NK Doces.</div><div class="confirm-actions"><button class="button full whatsapp" type="button" disabled>📲 Enviar pedido pelo WhatsApp</button></div><p class="confirm-help">O envio real pelo WhatsApp só está disponível na lojinha publicada, depois que uma reserva de verdade é registrada — esta é apenas uma demonstração e não abre o WhatsApp da Mitsuki.</p><button class="button ghost full" data-close>Voltar para a prévia</button>`);
 }
 
 function changeCart(key, delta) {

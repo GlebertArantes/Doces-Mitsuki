@@ -60,9 +60,49 @@ assets/img/              # imagens do protótipo V3 extraídas (ilustrativas)
 supabase/migrations/      # migrações versionadas (schema aditivo)
 supabase/seed/demo_catalog.sql  # dados de demonstração (idempotente)
 supabase/functions/dm-admin-login/  # Edge Function que faz o login do painel
+demo/index.html         # prévia de demonstração da vitrine, isolada (ver seção "Prévia")
+demo/js/demo-data.js     # instantâneo estático do catálogo (sem Supabase)
+demo/js/demo-store.js    # cópia adaptada de js/store.js, sem nenhuma chamada de rede
 ```
 
 Site estático puro (sem build step): pode ser publicado diretamente no Cloudflare Pages.
+
+## Prévia de demonstração (isolada)
+
+Link para testes com a cliente: **`/demo/`** (ex.: `https://doces-mitsuki.pages.dev/demo/`).
+
+Feita para a próxima rodada de testes, **sem nenhuma conexão com o Supabase** — nem leitura, nem
+escrita. `demo/index.html` não importa `js/config.js` nem `js/supabase-client.js`; o catálogo vem
+de `demo/js/demo-data.js`, um instantâneo estático do catálogo real (lido do banco só para copiar,
+em 28/09/2026 — se o catálogo mudar no painel depois, este arquivo precisa ser atualizado à mão,
+é o preço de manter a prévia totalmente isolada).
+
+O que funciona na prévia, tudo simulado em memória/`sessionStorage` do próprio navegador:
+- ver o catálogo (mesmos produtos/preços/fotos de hoje, marcados `[DEMO]`);
+- filtrar por "Caixinhas" / "Avulsos";
+- montar uma caixinha com 4 sabores (`monte sua caixinha`);
+- adicionar e remover itens do carrinho;
+- preencher o formulário de checkout;
+- ver uma tela de confirmação simulada, com um código de exemplo `DEMO-AAMMDD-NNN` gerado só no
+  navegador (contador reinicia a cada recarregamento da página).
+
+Faixa "✦ DEMONSTRAÇÃO — NENHUM PEDIDO SERÁ REGISTRADO ✦" fixa no topo, mais avisos "demo"/
+"simulação" repetidos no carrinho, no checkout e na confirmação.
+
+**Por que é seguro**: a prévia não tem `import` nenhum de `supabase-client.js`, não chama
+`fetch`/`rpc` para lugar nenhum, e "confirmar reserva" só gera um texto local — não existe
+nenhuma rota de código nela que grave em `dm_reservations`, decremente `dm_stock` ou toque em
+qualquer tabela real. Isso significa que ela funciona **mesmo com `is_active=false` e
+`is_open=false`** (não depende da loja estar publicada) e que nenhuma política de RLS, nenhuma
+checagem de publicação (`store_not_published`) e nenhuma regra de estoque/reserva da loja real
+foi tocada, enfraquecida ou contornada — a prévia simplesmente não fala com o banco.
+
+Testado (Chromium real via Playwright, localhost, nas larguras 320/360/375/390/430px + desktop):
+catálogo carrega (5 produtos), filtro funciona, montar caixinha com 4 sabores habilita o botão
+"adicionar", carrinho soma/remove itens, checkout preenchido e "confirmar" mostra a tela de
+simulação com o aviso de demonstração — sem overflow horizontal em nenhuma largura, e **zero
+requisições de rede para `supabase.co` ou `esm.sh`** (monitorado via interceptação de todas as
+requisições da página durante o teste, não só leitura de código).
 
 ## Branches
 

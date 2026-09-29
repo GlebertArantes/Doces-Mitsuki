@@ -3,14 +3,73 @@ import { TENANT_SLUG } from './config.js';
 
 const $ = id => document.getElementById(id);
 const money = n => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&lt;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
 let tenant = null;
 let session = null;
 let storeStatus = null;
 let inventory = [];
+let categories = [];
+let mediaByProduct = {};
 let orders = [];
 let toastHandle;
+
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const ACCEPTED_PHOTO_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+
+function isHeicFile(file) {
+  const name = (file.name || '').toLowerCase();
+  return /\.(heic|heif)$/.test(name) || file.type === 'image/heic' || file.type === 'image/heif';
+}
+
+function coverMedia(productId) {
+  const list = mediaByProduct[productId];
+  if (!list || !list.length) return null;
+  return list.find(m => m.is_cover) || list[0];
+}
+
+async function uploadProductPhoto(file, productId) {
+  if (isHeicFile(file)) {
+    throw new Error('heic_unsupported');
+  }
+  const ext = ACCEPTED_PHOTO_TYPES[file.type];
+  if (!ext) throw new Error('invalid_type');
+  if (file.size > MAX_PHOTO_BYTES) throw new Error('too_large');
+
+  const path = `${TENANT_SLUG}/${productId}/${crypto.randomUUID()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from('product-media').upload(path, file, { contentType: file.type, upsert: false });
+  if (upErr) throw new Error('upload_failed');
+
+  const { data: pub } = supabase.storage.from('product-media').getPublicUrl(path);
+  const publicUrl = pub?.publicUrl;
+
+  const { data: mediaRow, error: insErr } = await supabase.from('product_media').insert({
+    tenant_id: tenant.id, product_id: productId, storage_path: path, public_url: publicUrl,
+    media_type: 'image', mime_type: file.type, is_cover: true,
+  }).select().maybeSingle();
+
+  if (insErr || !mediaRow) {
+    await supabase.storage.from('product-media').remove([path]).catch(() => {});
+    throw new Error('link_failed');
+  }
+
+  const previousCovers = (mediaByProduct[productId] || []).filter(m => m.id !== mediaRow.id);
+  if (previousCovers.length) {
+    await supabase.from('product_media').update({ is_cover: false }).in('id', previousCovers.map(m => m.id));
+    const oldPaths = previousCovers.map(m => m.storage_path).filter(Boolean);
+    if (oldPaths.length) await supabase.storage.from('product-media').remove(oldPaths).catch(() => {});
+  }
+
+  return mediaRow;
+}
+
+const PHOTO_ERROR_MESSAGES = {
+  heic_unsupported: 'Fotos em HEIC/HEIF (padrão do iPhone) não são aceitas. No iPhone, vá em Ajustes → Câmera → Formatos e escolha "Mais compatível", ou use Editar → Duplicar como JPEG antes de enviar.',
+  invalid_type: 'Envie uma foto em JPEG, PNG ou WebP.',
+  too_large: 'A foto é muito grande (máximo 8 MB). Tente uma foto com menos resolução.',
+  upload_failed: 'Não foi possível enviar a foto agora. Tente novamente.',
+  link_failed: 'A foto foi enviada, mas não pôde ser vinculada ao produto. Tente novamente.',
+};
 
 function notify(message) {
   const t = $('toast');
@@ -118,11 +177,13 @@ async function boot() {
 }
 
 async function loadAll() {
-  const [{ data: statusRow }, { data: prods }, { data: ext }, { data: stock }, { data: reservations }, { data: report }] = await Promise.all([
+  const [{ data: statusRow }, { data: prods }, { data: ext }, { data: stock }, { data: cats }, { data: media }, { data: reservations }, { data: report }] = await Promise.all([
     supabase.from('dm_store_status').select('*').eq('tenant_id', tenant.id).maybeSingle(),
-    supabase.from('products').select('id, name, slug, description, price, status').eq('tenant_id', tenant.id).order('created_at'),
+    supabase.from('products').select('id, name, slug, description, price, status, category_id').eq('tenant_id', tenant.id).order('created_at'),
     supabase.from('dm_product_ext').select('*').eq('tenant_id', tenant.id),
     supabase.from('dm_stock').select('*').eq('tenant_id', tenant.id),
+    supabase.from('categories').select('id, name').eq('tenant_id', tenant.id).eq('is_active', true).order('display_order'),
+    supabase.from('product_media').select('*').eq('tenant_id', tenant.id).order('sort_order'),
     supabase.from('dm_reservations').select('*, dm_reservation_items(*)').eq('tenant_id', tenant.id).order('created_at', { ascending: false }),
     supabase.from('dm_sales_report').select('*').eq('tenant_id', tenant.id).maybeSingle(),
   ]);
@@ -131,6 +192,9 @@ async function loadAll() {
   const extById = Object.fromEntries((ext || []).map(e => [e.product_id, e]));
   const stockById = Object.fromEntries((stock || []).map(s => [s.product_id, s]));
   inventory = (prods || []).map(p => ({ ...p, ext: extById[p.id] || {}, stock: stockById[p.id] || null }));
+  categories = cats || [];
+  mediaByProduct = {};
+  for (const m of (media || [])) (mediaByProduct[m.product_id] ||= []).push(m);
   orders = reservations || [];
 
   renderSettings();
@@ -167,7 +231,15 @@ function renderInventory() {
   $('inventory').innerHTML = inventory.map(p => {
     const kindLabel = { ready_box: 'Caixinha pronta', buildable_box: 'Monte sua caixinha', flavor: 'Avulso' }[p.ext.kind] || '';
     const stockText = p.ext.kind === 'buildable_box' ? 'Usa o estoque dos sabores avulsos' : `${p.stock?.quantity_available ?? 0} un. disponíveis`;
-    return `<div class="mini-row"><div><strong>${esc(p.name)}</strong><small>${esc(kindLabel)} · ${stockText} · ${money(p.price)}</small></div><button class="edit-btn" data-edit-product="${esc(p.id)}">Editar</button></div>`;
+    const catName = categories.find(c => c.id === p.category_id)?.name || '';
+    const cover = coverMedia(p.id);
+    const thumb = cover?.public_url
+      ? `<img src="${esc(cover.public_url)}" alt="" class="inv-thumb">`
+      : `<div class="inv-thumb inv-thumb-empty" aria-hidden="true">🍬</div>`;
+    const statusPill = p.status === 'published'
+      ? '<span class="status-pill on">Publicado</span>'
+      : '<span class="status-pill off">Oculto</span>';
+    return `<div class="mini-row"><div class="mini-row-media">${thumb}</div><div><strong>${esc(p.name)}</strong><small>${esc(kindLabel)}${catName ? ' · ' + esc(catName) : ''} · ${stockText} · ${money(p.price)}</small><div>${statusPill}</div></div><div class="mini-row-actions"><button class="edit-btn" data-toggle-publish="${esc(p.id)}">${p.status === 'published' ? 'Ocultar' : 'Publicar'}</button><button class="edit-btn" data-edit-product="${esc(p.id)}">Editar</button></div></div>`;
   }).join('');
 }
 
@@ -175,14 +247,137 @@ function editProduct(productId) {
   const p = inventory.find(x => x.id === productId);
   if (!p) return;
   const showStock = p.ext.kind !== 'buildable_box';
+  const canChangeCategory = p.ext.kind !== 'buildable_box';
+  const cover = coverMedia(productId);
+  const catOptions = categories.map(c => `<option value="${esc(c.id)}" ${c.id === p.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   openModal(sheetTitle('Editar produto') + `<form id="edit-product-form" data-id="${esc(productId)}">
+    <div class="photo-field">
+      ${cover?.public_url ? `<img src="${esc(cover.public_url)}" alt="" class="photo-preview" id="edit-photo-preview">` : `<div class="photo-preview photo-preview-empty" id="edit-photo-preview">🍬</div>`}
+      <label class="field" style="flex:1"><span>Foto do produto</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp,.heic,.heif"></label>
+    </div>
+    <p class="hint">JPEG, PNG ou WebP, até 8&nbsp;MB. Fotos do iPhone em HEIC precisam ser convertidas antes de enviar.</p>
     <label class="field">Nome<input name="name" maxlength="120" required value="${esc(p.name)}"></label>
     <label class="field">Descrição<textarea name="description" maxlength="240">${esc(p.description || '')}</textarea></label>
+    ${canChangeCategory ? `<label class="field">Categoria<select name="category">${catOptions}</select></label>` : ''}
     <label class="field">Preço (R$)<input name="price" inputmode="decimal" required value="${String(p.price).replace('.', ',')}"></label>
     ${showStock ? `<label class="field">Estoque disponível agora<input name="stock" type="number" min="0" max="9999" step="1" required value="${p.stock?.quantity_available ?? 0}"></label>` : ''}
     <p class="hint">Alterar o estoque não modifica reservas já registradas.</p>
     <button class="button full" type="submit" style="margin-top:13px">Salvar alterações</button>
   </form>`);
+  $('edit-product-form').elements.photo.addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (isHeicFile(file)) { notify(PHOTO_ERROR_MESSAGES.heic_unsupported); e.target.value = ''; return; }
+    const preview = $('edit-photo-preview');
+    const url = URL.createObjectURL(file);
+    if (preview.tagName === 'IMG') preview.src = url;
+    else { const img = document.createElement('img'); img.className = 'photo-preview'; img.id = 'edit-photo-preview'; img.src = url; preview.replaceWith(img); }
+  });
+}
+
+function showCreateProductForm() {
+  const catOptions = categories.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  openModal(sheetTitle('Cadastrar produto') + `<p class="extra">O produto é salvo como Oculto. Revise tudo e publique quando estiver pronto.</p><form id="create-product-form">
+    <div class="photo-field">
+      <div class="photo-preview photo-preview-empty" id="new-photo-preview">🍬</div>
+      <label class="field" style="flex:1"><span>Foto do produto (opcional)</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp,.heic,.heif"></label>
+    </div>
+    <p class="hint">JPEG, PNG ou WebP, até 8&nbsp;MB. Sem foto, o cardápio mostra um ícone neutro no lugar.</p>
+    <label class="field">Nome<input name="name" maxlength="120" required placeholder="Ex.: Cajuzinho"></label>
+    <label class="field">Descrição<textarea name="description" maxlength="240" placeholder="Opcional"></textarea></label>
+    <label class="field">Tipo<select name="kind" required>
+      <option value="flavor">Docinho avulso</option>
+      <option value="ready_box">Caixinha pronta</option>
+    </select></label>
+    <label class="field">Categoria<select name="category" required><option value="" disabled selected>Escolha uma categoria</option>${catOptions}</select></label>
+    <label class="field">Preço (R$)<input name="price" inputmode="decimal" required placeholder="Ex.: 3,50"></label>
+    <label class="field">Estoque disponível agora<input name="stock" type="number" min="0" max="9999" step="1" required value="0"></label>
+    <button class="button full" type="submit" style="margin-top:13px">Cadastrar produto</button>
+  </form>`);
+  $('create-product-form').elements.photo.addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (isHeicFile(file)) { notify(PHOTO_ERROR_MESSAGES.heic_unsupported); e.target.value = ''; return; }
+    const preview = $('new-photo-preview');
+    const url = URL.createObjectURL(file);
+    const img = document.createElement('img');
+    img.className = 'photo-preview'; img.id = 'new-photo-preview'; img.src = url;
+    preview.replaceWith(img);
+  });
+}
+
+let creatingProduct = false;
+async function createProduct(form) {
+  if (creatingProduct) return;
+  const name = form.elements.name.value.trim();
+  const description = form.elements.description.value.trim();
+  const kind = form.elements.kind.value;
+  const categoryId = form.elements.category.value;
+  const rawPrice = form.elements.price.value.trim().replace(/\s/g, '').replace(',', '.');
+  const price = Number(rawPrice);
+  const stock = Number(form.elements.stock.value);
+  const photoFile = form.elements.photo.files?.[0] || null;
+
+  if (!name) return notify('Informe o nome do produto.');
+  if (!Number.isFinite(price) || price <= 0 || price > 10000) return notify('Informe um preço válido (maior que zero).');
+  if (!Number.isInteger(stock) || stock < 0 || stock > 9999) return notify('Informe um estoque válido.');
+  if (!categoryId) return notify('Escolha uma categoria.');
+  if (photoFile && isHeicFile(photoFile)) return notify(PHOTO_ERROR_MESSAGES.heic_unsupported);
+
+  creatingProduct = true;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Cadastrando...'; }
+
+  const { data, error } = await supabase.rpc('dm_admin_create_product', {
+    p_tenant_slug: TENANT_SLUG, p_name: name, p_description: description || null,
+    p_price: price, p_category_id: categoryId, p_kind: kind, p_stock: stock,
+  });
+
+  if (error) {
+    creatingProduct = false;
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Cadastrar produto'; }
+    const code = (error.message || '').match(/[a-z_]+/)?.[0];
+    const map = {
+      invalid_name: 'Informe um nome válido.', invalid_price: 'Informe um preço válido.',
+      invalid_stock: 'Informe um estoque válido.', invalid_category: 'Escolha uma categoria válida.',
+      invalid_kind: 'Tipo de produto inválido.', not_authorized: 'Sua conta não pode cadastrar produtos.',
+    };
+    return notify(map[code] || 'Não foi possível cadastrar o produto. Tente novamente.');
+  }
+
+  const created = Array.isArray(data) ? data[0] : data;
+  creatingProduct = false;
+
+  if (photoFile && created?.product_id) {
+    try {
+      await uploadProductPhoto(photoFile, created.product_id);
+    } catch (photoErr) {
+      notify('Produto cadastrado (oculto), mas a foto não pôde ser salva: ' + (PHOTO_ERROR_MESSAGES[photoErr.message] || 'tente enviar de novo na edição.'));
+      closeModal();
+      await loadAll();
+      return;
+    }
+  }
+
+  notify('Produto cadastrado como Oculto! Edite ou publique quando quiser.');
+  closeModal();
+  await loadAll();
+}
+
+async function togglePublish(productId) {
+  const p = inventory.find(x => x.id === productId);
+  if (!p) return;
+  const nextStatus = p.status === 'published' ? 'hidden' : 'published';
+  if (nextStatus === 'published') {
+    if (!p.name?.trim() || !(Number(p.price) > 0)) return notify('Complete nome e preço antes de publicar.');
+    if (p.ext.kind !== 'buildable_box' && (p.stock?.quantity_available == null || p.stock.quantity_available < 0)) {
+      return notify('Defina o estoque antes de publicar.');
+    }
+  }
+  const { error } = await supabase.from('products').update({ status: nextStatus }).eq('id', productId);
+  if (error) return notify('Não foi possível atualizar a publicação.');
+  notify(nextStatus === 'published' ? 'Produto publicado! Já aparece na vitrine.' : 'Produto ocultado da vitrine.');
+  await loadAll();
 }
 
 function renderOrders() {
@@ -233,7 +428,9 @@ async function saveSettings(form) {
   notify('Configurações salvas.');
 }
 
+let savingProduct = false;
 async function saveProduct(form) {
+  if (savingProduct) return;
   const id = form.dataset.id;
   const p = inventory.find(x => x.id === id);
   if (!p) return;
@@ -241,20 +438,50 @@ async function saveProduct(form) {
   const description = form.elements.description.value.trim();
   const rawPrice = form.elements.price.value.trim().replace(/\s/g, '').replace(',', '.');
   const price = Number(rawPrice);
+  const photoFile = form.elements.photo?.files?.[0] || null;
   if (!name) return notify('Informe o nome do produto.');
   if (!Number.isFinite(price) || price <= 0 || price > 10000) return notify('Informe um preço válido.');
+  if (photoFile && isHeicFile(photoFile)) return notify(PHOTO_ERROR_MESSAGES.heic_unsupported);
 
-  const { error: prodErr } = await supabase.from('products').update({ name, description, price }).eq('id', id);
-  if (prodErr) return notify('Não foi possível salvar o produto.');
+  savingProduct = true;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Salvando...'; }
+
+  const patch = { name, description, price };
+  if (form.elements.category) patch.category_id = form.elements.category.value;
+  const { error: prodErr } = await supabase.from('products').update(patch).eq('id', id);
+  if (prodErr) {
+    savingProduct = false;
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Salvar alterações'; }
+    return notify('Não foi possível salvar o produto.');
+  }
 
   if (p.ext.kind !== 'buildable_box') {
     const stock = Number(form.elements.stock.value);
-    if (!Number.isInteger(stock) || stock < 0 || stock > 9999) return notify('Informe um estoque válido.');
+    if (!Number.isInteger(stock) || stock < 0 || stock > 9999) {
+      savingProduct = false;
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Salvar alterações'; }
+      return notify('Informe um estoque válido.');
+    }
     const { error: stockErr } = await supabase.from('dm_stock').upsert({
       tenant_id: tenant.id, product_id: id, quantity_available: stock, updated_by: session.user.id,
     }, { onConflict: 'tenant_id,product_id' });
-    if (stockErr) return notify('Produto salvo, mas o estoque não pôde ser atualizado.');
+    if (stockErr) notify('Produto salvo, mas o estoque não pôde ser atualizado.');
   }
+
+  if (photoFile) {
+    try {
+      await uploadProductPhoto(photoFile, id);
+    } catch (photoErr) {
+      notify('Dados salvos, mas a foto não pôde ser enviada: ' + (PHOTO_ERROR_MESSAGES[photoErr.message] || 'tente novamente.'));
+      savingProduct = false;
+      closeModal();
+      await loadAll();
+      return;
+    }
+  }
+
+  savingProduct = false;
   notify('Produto atualizado!');
   closeModal();
   await loadAll();
@@ -297,7 +524,9 @@ document.addEventListener('click', e => {
   if (!b) return;
   if (b.id === 'logout-btn') { supabase.auth.signOut().then(() => renderAuthScreen()); return; }
   if (b.id === 'toggle-open') return toggleOpen();
+  if (b.id === 'new-product-btn') return showCreateProductForm();
   if (b.dataset.editProduct) return editProduct(b.dataset.editProduct);
+  if (b.dataset.togglePublish) return togglePublish(b.dataset.togglePublish);
   if (b.dataset.close !== undefined) return closeModal();
   if (b.dataset.orderPaid) return togglePaid(b.dataset.orderPaid);
 });
@@ -307,6 +536,7 @@ document.addEventListener('change', e => {
 document.addEventListener('submit', e => {
   if (e.target.id === 'settings-form') { e.preventDefault(); return saveSettings(e.target); }
   if (e.target.id === 'edit-product-form') { e.preventDefault(); return saveProduct(e.target); }
+  if (e.target.id === 'create-product-form') { e.preventDefault(); return createProduct(e.target); }
 });
 $('overlay').addEventListener('click', e => { if (e.target === $('overlay')) closeModal(); });
 

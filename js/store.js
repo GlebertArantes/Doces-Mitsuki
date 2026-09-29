@@ -79,17 +79,25 @@ async function loadData() {
   }
   tenant = tenantRow;
 
-  const [{ data: statusRow }, { data: cats }, { data: prods }, { data: ext }, { data: avail }] = await Promise.all([
+  const [{ data: statusRow }, { data: cats }, { data: prods }, { data: ext }, { data: avail }, { data: media }] = await Promise.all([
     supabase.from('dm_store_status').select('*').eq('tenant_id', tenant.id).maybeSingle(),
     supabase.from('categories').select('id, name, slug').eq('tenant_id', tenant.id).eq('is_active', true).order('display_order'),
     supabase.from('products').select('id, name, slug, description, price, category_id, status').eq('tenant_id', tenant.id).eq('status', 'published'),
     supabase.from('dm_product_ext').select('*').eq('tenant_id', tenant.id),
     supabase.from('dm_availability_public').select('*').eq('tenant_id', tenant.id),
+    supabase.from('product_media').select('product_id, public_url, is_cover, sort_order').eq('tenant_id', tenant.id),
   ]);
 
   storeStatus = statusRow || { is_open: false, pickup_instructions: 'Retirada diretamente com a Mitsuki, na Brago.', pix_key: null };
   const extById = Object.fromEntries((ext || []).map(e => [e.product_id, e]));
   const availById = Object.fromEntries((avail || []).map(a => [a.product_id, a.is_available]));
+  const mediaByProduct = {};
+  for (const m of (media || [])) (mediaByProduct[m.product_id] ||= []).push(m);
+  const coverUrl = productId => {
+    const list = mediaByProduct[productId];
+    if (!list || !list.length) return null;
+    return (list.find(m => m.is_cover) || list.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0]).public_url || null;
+  };
 
   products = (prods || []).map(p => {
     const e = extById[p.id] || {};
@@ -97,7 +105,7 @@ async function loadData() {
       id: p.id, name: p.name, slug: p.slug, description: p.description, price: Number(p.price),
       kind: e.kind || 'flavor', boxSlotCount: e.box_slot_count || null,
       isAvailable: e.kind === 'buildable_box' ? null : !!availById[p.id],
-      image: IMAGE_BY_SLUG[p.slug] || null,
+      image: coverUrl(p.id) || IMAGE_BY_SLUG[p.slug] || null,
     };
   });
 
@@ -143,18 +151,20 @@ function render() {
   if (filter !== 'single') {
     for (const box of products.filter(x => x.kind === 'ready_box')) {
       const left = box.isAvailable;
-      p.push(`<article class="product"><div class="product-img"><img src="${box.image || ''}" alt="Imagem ilustrativa de caixinha com quatro docinhos"><span class="photo-overlay"></span><span class="product-ribbon">Caixinha pronta</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha rápida, já montada para você.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn" data-add-ready="${esc(box.id)}" aria-label="Adicionar ${esc(box.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
+      const img = box.image ? `<img loading="lazy" decoding="async" src="${esc(box.image)}" alt="Imagem ilustrativa de caixinha com quatro docinhos" onerror="this.remove()">` : '<div class="img-placeholder" aria-hidden="true">🍬</div>';
+      p.push(`<article class="product"><div class="product-img">${img}<span class="photo-overlay"></span><span class="product-ribbon">Caixinha pronta</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha rápida, já montada para você.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn" data-add-ready="${esc(box.id)}" aria-label="Adicionar ${esc(box.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
     }
     for (const box of products.filter(x => x.kind === 'buildable_box')) {
       const canBuild = canBuildBox(box);
-      p.push(`<article class="product"><div class="product-img"><img src="${box.image || ''}" alt="Imagem ilustrativa de caixinha montada com quatro docinhos variados"><span class="photo-overlay"></span><span class="product-ribbon">Do seu jeito ♡</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha quatro sabores, iguais ou diferentes.</p><div class="stock ${!canBuild ? 'out' : ''}">${!canBuild ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn build" data-build="${esc(box.id)}" ${!open || !canBuild ? 'disabled' : ''}>Montar</button></div></div></article>`);
+      const img = box.image ? `<img loading="lazy" decoding="async" src="${esc(box.image)}" alt="Imagem ilustrativa de caixinha montada com quatro docinhos variados" onerror="this.remove()">` : '<div class="img-placeholder" aria-hidden="true">🍬</div>';
+      p.push(`<article class="product"><div class="product-img">${img}<span class="photo-overlay"></span><span class="product-ribbon">Do seu jeito ♡</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha quatro sabores, iguais ou diferentes.</p><div class="stock ${!canBuild ? 'out' : ''}">${!canBuild ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn build" data-build="${esc(box.id)}" ${!open || !canBuild ? 'disabled' : ''}>Montar</button></div></div></article>`);
     }
   }
   if (filter !== 'boxes') {
     for (const s of flavorList()) {
       const left = s.isAvailable;
       const style = SWEET_STYLE[s.slug] || { emoji: '🍬', color: '#9d5f45' };
-      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div><img class="sweet-photo" loading="lazy" decoding="async" src="${s.image || ''}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()"><span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><button class="addbtn" data-add-single="${esc(s.id)}" aria-label="Adicionar ${esc(s.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
+      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div>${s.image ? `<img class="sweet-photo" loading="lazy" decoding="async" src="${esc(s.image)}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()">` : ''}<span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><button class="addbtn" data-add-single="${esc(s.id)}" aria-label="Adicionar ${esc(s.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
     }
   }
   $('products').innerHTML = p.join('') || '<div class="blank" style="grid-column:1/-1">Nenhum produto nesta categoria.</div>';
@@ -289,14 +299,16 @@ async function confirmReservation(form) {
     note ? 'Observação: ' + note : null,
   ].filter(Boolean).join('\n');
 
-  lastWhatsAppMessage = buildWhatsAppMessage(result, customer, cartSnapshot, note);
+  lastWhatsAppMessage = buildWhatsAppMessage(result, customer, cartSnapshot, note, sector);
   const waLink = 'https://wa.me/' + WHATSAPP_NUMBER + '?text=' + encodeURIComponent(lastWhatsAppMessage);
 
   openModal(sheetTitle('Reserva registrada ♡') + `<div class="confirm-head"><div class="confirm-icon">🎀</div><h2>Seu docinho está reservado!</h2><p>Pedido <b>#${esc(result.order_code)}</b> registrado. Mostre esta tela para a Mitsuki na retirada.</p></div><div class="receipt">${esc(receiptLines)}</div>${storeStatus.pix_key ? `<div class="pick-box"><strong style="font-size:12px">Chave Pix</strong><p style="overflow-wrap:anywhere;font-size:12px;color:#795969;margin:9px 0">${esc(storeStatus.pix_key)}</p></div>` : '<div class="notice">A chave Pix ainda não foi cadastrada. O pagamento será combinado diretamente com a Mitsuki.</div>'}<div class="confirm-actions"><a class="button full whatsapp" href="${esc(waLink)}" target="_blank" rel="noopener noreferrer" id="wa-send-btn">📲 Enviar pedido pelo WhatsApp</a><button class="button full ghost" type="button" id="copy-whatsapp-msg">📋 Copiar mensagem</button></div><p class="confirm-help">Seu pedido já foi registrado! Toque no botão acima para abrir o WhatsApp da Mitsuki com a mensagem pronta — você ainda precisa tocar em "Enviar" dentro do próprio WhatsApp. Se ele não abrir automaticamente, use "Copiar mensagem" e cole na conversa.</p><button class="button ghost full" data-close>Voltar para a lojinha</button>`);
 }
 
-function buildWhatsAppMessage(result, customer, cartSnapshot, note) {
-  const lines = ['🍬 *NK DOCES — NOVO PEDIDO*', '', '*Pedido:* #' + result.order_code, '*Cliente:* ' + customer, '', '*ITENS*'];
+function buildWhatsAppMessage(result, customer, cartSnapshot, note, sector) {
+  const lines = ['🍬 *NK DOCES — NOVO PEDIDO*', '', '*Pedido:* #' + result.order_code, '*Cliente:* ' + customer];
+  if (sector) lines.push('*Referência:* ' + sector);
+  lines.push('', '*ITENS*');
   for (const i of cartSnapshot) {
     if (i.kind === 'buildable_box') {
       const counts = new Map();

@@ -36,3 +36,19 @@
 .auth-screen p{color:var(--muted);font-size:12px;line-height:1.6;margin:0 0 8px}
 .error-text{color:#aa4e58;font-size:11px;line-height:1.5;margin:6px 0 0}
 .loading-text{color:var(--muted);font-size:12px;text-align:center;padding:20px}
+
+/* Admin product CRUD (create/edit/photo upload) */
+.mini-row{align-items:flex-start}
+.mini-row-media{flex-shrink:0}
+.inv-thumb{width:46px;height:46px;border-radius:12px;object-fit:cover;background:#f7e6e4;display:block}
+.inv-thumb-empty{display:grid;place-items:center;font-size:20px;color:#b98494}
+.mini-row-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.status-pill{display:inline-block;font-size:9px;font-weight:850;border-radius:99px;padding:3px 8px;margin-top:5px}
+.status-pill.on{background:#e7f6eb;color:#286e48}
+.status-pill.off{background:#f4e9eb;color:#8c6a74}
+.photo-field{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.photo-preview{width:64px;height:64px;border-radius:14px;object-fit:cover;background:#f7e6e4;flex-shrink:0}
+.photo-preview-empty{display:grid;place-items:center;font-size:26px;color:#b98494}
+.photo-field .field{margin-bottom:0}
+.photo-field .field span{display:block;margin-bottom:4px}
+.img-placeholder{font-size:34px;opacity:.55;z-index:1}

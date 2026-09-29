@@ -149,6 +149,73 @@ WhatsApp.
   explicando que o envio real só existe na loja publicada — a demo nunca abre o WhatsApp de
   verdade nem gera uma mensagem com número real, consistente com seu isolamento total do Supabase.
 
+## Cadastro de produtos e fotos pelo painel
+
+A Mitsuki cadastra, edita e publica produtos direto pelo celular, sem depender de deploy ou de
+alteração de código.
+
+- **Botão "+ Cadastrar produto"** (painel → "Estoque do dia"): cria docinho avulso (`flavor`) ou
+  caixinha pronta (`ready_box`). A "monte sua caixinha" (`buildable_box`) continua a mesma de
+  sempre — não é possível criar outra pelo formulário genérico, porque ela usa uma regra própria de
+  composição (4 sabores) e não tem estoque direto (usa o dos sabores avulsos). Isso é reforçado no
+  banco: a RPC de criação só aceita `p_kind IN ('flavor', 'ready_box')`.
+- **Sempre criado Oculto**: `dm_admin_create_product(...)` (nova função `SECURITY DEFINER`, migração
+  `0008_dm_admin_create_product.sql`) grava `products` + `dm_product_ext` + `dm_stock` numa única
+  transação — ou os três gravam, ou nenhum grava; não existe estado de "produto pela metade". O
+  produto nasce sempre `status='hidden'`, mesmo se a Mitsuki tentasse publicar direto (o formulário
+  de criação nem oferece essa opção); publicar é um passo separado, explícito, feito depois.
+- **Publicar/Ocultar**: botão por produto na lista de estoque, alterna `products.status` entre
+  `hidden`/`published`. Antes de publicar, o painel confere (no navegador) que nome, preço e
+  estoque estão preenchidos — como a criação já exige tudo isso, na prática isso só protege contra
+  edição incompleta feita depois.
+- **Categoria**: o formulário lê as categorias reais do tenant (`Caixinhas Prontas`, `Monte sua
+  Caixinha`, `Docinhos Avulsos`) direto do banco — nenhum id fixo no código.
+- **Slug**: gerado a partir do nome (minúsculas, sem acento/símbolo, hifenizado) dentro da própria
+  RPC; colisão dentro do tenant é resolvida acrescentando `-2`, `-3`, etc. automaticamente.
+- **Foto**: upload direto do celular, reaproveitando o bucket público `product-media` e a tabela
+  `product_media` já existentes (nenhum dos dois foi criado nesta rodada — só passaram a ser
+  usados pela NK Doces). Caminho sempre `doces-mitsuki/<product_id>/<nome-aleatório>.<ext>` — o
+  primeiro segmento do caminho precisa bater com o slug do tenant, e é isso que a política de
+  Storage já existente confere. Aceita JPEG/PNG/WebP até 8&nbsp;MB; fotos HEIC/HEIF do iPhone são
+  recusadas com uma mensagem explicando como converter antes (Ajustes → Câmera → Formatos →
+  "Mais compatível", ou Editar → Duplicar como JPEG) — nunca finge que o upload funcionou.
+  Substituir a foto de um produto **não apaga a antiga até a nova estar gravada e vinculada**: o
+  upload novo é enviado e o registro em `product_media` é inserido primeiro; só depois disso dá
+  certo é que a foto anterior é desmarcada como capa e removida do Storage. Se qualquer etapa
+  falhar no meio do caminho, a foto antiga continua sendo a exibida, e o erro é mostrado com uma
+  mensagem clara (nunca uma falsa confirmação de sucesso).
+- **Produto sem foto**: mostra um ícone neutro (🍬) no lugar, tanto na vitrine quanto no painel —
+  nunca a foto de outro produto nem uma imagem quebrada.
+- **Vitrine dinâmica**: `js/store.js` agora busca `product_media` do tenant e prefere a foto de
+  capa (`is_cover`) de cada produto; as imagens estáticas antigas (`IMAGE_BY_SLUG`) viraram
+  fallback só para os produtos correspondentes (os 5 originais, enquanto não tiverem foto própria
+  cadastrada). Cadastro, foto, preço, publicação e estoque aparecem na vitrine só recarregando a
+  página — sem novo deploy.
+- **Sabor novo entra automaticamente na "monte sua caixinha"**: o montador lê `products.filter(kind
+  === 'flavor')` a partir do mesmo carregamento da vitrine — não existe lista separada, então um
+  sabor avulso recém-publicado (com estoque) aparece nas opções assim que a página recarrega.
+- **Isolamento entre lojas (achado da auditoria desta rodada, corrigido em `esc()` e documentado à
+  parte para `product_media`)**: `product_media.tenant_id` e `product_media.product_id` são duas
+  chaves estrangeiras **independentes** — nada no schema/RLS de hoje impede, em tese, gravar
+  `tenant_id` de uma loja apontando para um produto de outra. Confirmado por auditoria somente
+  leitura que **não existe nenhuma linha assim hoje**, em nenhuma das lojas do projeto. Uma correção
+  mínima (trigger que rejeita essa combinação) está pronta em
+  `supabase/migrations/PROPOSTA_dm_product_media_tenant_guard.sql`, mas **não foi aplicada** — ela
+  afeta a tabela compartilhada `product_media`, usada por todas as lojas do projeto (Donna Store, EB
+  Fit, Nosso Closet, não só NK Doces), então fica sujeita a aprovação explícita antes de entrar no
+  banco compartilhado, como pedido. O código desta rodada (upload de foto da NK Doces) já sempre
+  grava o `tenant_id` correto, então não depende dessa correção para funcionar direito — ela é uma
+  camada de proteção a mais contra erro futuro, não um requisito para o que foi entregue agora.
+- **Correção de bug encontrado nesta auditoria (não relacionado a fotos)**: `esc()` em `js/admin.js`
+  mapeava `&` para `&lt;` em vez de `&amp;` — um nome de produto com `&` aparecia corrompido no
+  painel (embora sem risco de XSS, já que `<`/`>`/`"`/`'` estavam corretos). Corrigido; testado com
+  nome contendo `&`, `<script>`, aspas duplas e simples — salva e exibe o texto literal, sem
+  executar nada.
+- **Correção de bug encontrado nesta auditoria (WhatsApp)**: a "Referência para retirada" digitada
+  no checkout aparecia no recibo da tela, mas nunca era passada para `buildWhatsAppMessage()` —
+  `js/store.js` corrigido para incluir `*Referência:* <valor>` na mensagem do WhatsApp quando o
+  campo é preenchido (linha some da mensagem quando o campo fica em branco, sem inventar valor).
+
 ## Branches
 
 - `main`: branch de publicação/deploy — é o que o Cloudflare Pages usa como origem.
@@ -219,6 +286,15 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
    contornando por completo o bloqueio por tentativas. As duas funções foram removidas; o login
    passou inteiro para a Edge Function `dm-admin-login` — ver seção "Login do painel" abaixo.
    Também adiciona `source_ip` em `dm_login_attempts`, para um segundo limite por IP.)
+8. `0008_dm_admin_create_product.sql` (nova função `dm_admin_create_product(...)`, usada pelo botão
+   "+ Cadastrar produto" do painel — grava `products` + `dm_product_ext` + `dm_stock` numa única
+   transação atômica, sempre com `status='hidden'`, valida nome/preço/estoque/categoria/tipo e
+   gera um slug único dentro do tenant. Aditiva: nenhuma tabela ou política existente foi tocada.)
+
+**Proposta ainda não aplicada** (aguardando aprovação — ver seção "Cadastro de produtos e fotos"
+acima): `supabase/migrations/PROPOSTA_dm_product_media_tenant_guard.sql`, um trigger que fecha a
+lacuna encontrada nesta auditoria entre `product_media.tenant_id` e o tenant real do produto
+referenciado. Não numerada de propósito, para não passar a impressão de que já foi aplicada.
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
 
@@ -372,10 +448,9 @@ Sem build step: sirva a pasta com qualquer servidor estático, ex.:
 npx serve .
 ```
 
-Abra `/` para a vitrine e `/admin/` para o painel. Como o tenant está `is_active=false`, a
-vitrine pública mostrará "Em breve" até a ativação — isso é esperado e é o comportamento de
-segurança correto. O painel (`/admin/`), por outro lado, funciona normalmente mesmo com
-`is_active=false` para quem tiver uma conta vinculada ao tenant (ver migração 0004).
+Abra `/` para a vitrine e `/admin/` para o painel. O tenant está `is_active=true` (vitrine
+publicada, visível a qualquer visitante), mas `dm_store_status.is_open=false`: o cardápio aparece
+normalmente, só reservas novas é que o RPC recusa até a Mitsuki reabrir as vendas.
 
 ## Testes executados (procedimento controlado)
 
@@ -613,8 +688,56 @@ automatizadas, todas aprovadas:
   prévia) — `document.documentElement.scrollWidth` igual a `window.innerWidth` em todos os 18
   casos, zero overflow horizontal após as mudanças de texto/monograma desta rodada.
 
+**Nesta rodada** (cadastro de produtos com foto, vitrine dinâmica, correções de WhatsApp/`esc()` —
+sem tocar em `is_active`/`is_open`, sem alterar preços/estoque/Pix existentes, sem tocar em dados de
+outras lojas): mesmo procedimento — servidor HTTP local + Chromium real via Playwright, Supabase
+mockado em memória (sem chamada real a `supabase.co`). 51 verificações automatizadas, todas
+aprovadas (27 de funcionalidade + 24 de overflow):
+
+- **Cadastro sem foto**: `dm_admin_create_product` chamada com dados válidos → produto criado com
+  `status='hidden'`, `dm_product_ext.kind='flavor'` e `dm_stock.quantity_available` corretos;
+  aparece no painel com a pílula "Oculto" e o ícone de placeholder (sem foto).
+- **Validação client-side**: preço `0` e estoque negativo rejeitados **sem sequer chamar a RPC**
+  (confirmado contando as chamadas simuladas) — nenhuma tentativa de gravação inválida chega ao
+  banco.
+- **Nome com `&`, `<script>`, aspas duplas e simples**: salvo e exibido como texto literal no
+  painel, sem executar nenhum script (`window.__xss` nunca é definido) e com `&` corretamente
+  escapado como `&amp;` no HTML gerado — confirma a correção do bug do `esc()`.
+- **Upload de foto no cadastro**: preview aparece assim que o arquivo é escolhido (antes de
+  enviar); ao salvar, `storage.upload` é chamado com caminho começando em `doces-mitsuki/`; a linha
+  em `product_media` é criada com `is_cover=true` e o `tenant_id` correto; o painel passa a mostrar
+  a foto real no lugar do placeholder.
+- **HEIC/HEIF**: arquivo `.heic` mostra a mensagem de orientação (conversão no iPhone) assim que
+  selecionado, e o campo de arquivo é limpo — nenhuma tentativa de upload é feita.
+- **Duplo clique no botão "Cadastrar produto"**: cliques simultâneos resultam em **exatamente um**
+  produto criado, não dois — confirma a proteção contra duplo envio.
+- **Publicar/Ocultar**: alterna `products.status` para `published`/`hidden` de verdade, e o painel
+  reflete a pílula correspondente depois.
+- **Categorias reais**: o `<select>` do formulário lista exatamente as categorias do tenant
+  simulado (nenhum id fixo).
+- **Vitrine prefere foto cadastrada**: produto com linha em `product_media` (`is_cover=true`) mostra
+  essa URL na vitrine, não a imagem estática antiga.
+- **Produto sem foto não quebra a vitrine**: nenhuma tag `<img>` com `src=""` — mostra o
+  ícone/placeholder neutro (`.img-placeholder` ou `.sweet-art`, conforme o card).
+- **Sabor novo aparece no montador**: um sabor publicado criado só para o teste aparece na grade de
+  sabores da "monte sua caixinha" assim que a vitrine recarrega — sem lista separada para manter.
+- **WhatsApp com referência de retirada**: preenchendo "Referência para retirada" no checkout, a
+  mensagem gerada inclui `*Referência:* <valor>` — confirma a correção do bug que omitia esse dado.
+- **Overflow**: vitrine, lista de estoque do painel, modal "Cadastrar produto" e modal "Editar
+  produto" (com o novo campo de foto) — 0 ocorrências de overflow horizontal em 320/360/375/390/
+  430px e desktop (1280px), medido por `scrollWidth` vs. `innerWidth`, não inspeção visual.
+
 **Não testado nesta rodada** (mesma limitação de rede das rodadas anteriores, não simulado como se
 fosse produção):
+- O upload de foto real contra o bucket `product-media` do Supabase e a leitura de volta via
+  `getPublicUrl` — o mock simula o retorno da API do Storage, mas não há chamada de rede real nem
+  um arquivo realmente salvo no bucket.
+- A checagem de isolamento entre tenants no Storage (política de `storage.objects` que exige o
+  primeiro segmento do caminho = slug do tenant) foi confirmada por **leitura das políticas via
+  auditoria somente leitura no Supabase** (não por uma tentativa real de upload cruzado neste
+  ambiente sem rede).
+- Conversão real de uma foto HEIC de iPhone (o teste só confirma que a extensão/tipo é rejeitada
+  antes do envio, não testa a conversão em si, que fica a critério da Mitsuki).
 - O round-trip real contra o Supabase publicado (`dm_create_reservation` de verdade, gerando um
   `order_code` genuíno) — os testes acima usam uma RPC simulada que devolve um código fixo, não uma
   reserva real gravada no banco. Recomendo um teste real, com autorização explícita, quando a
@@ -635,18 +758,31 @@ fosse produção):
 2. **Confirmação comercial**: preços reais, sabores definitivos, chave Pix.
 3. **Autorização de imagem**: o retrato da Mitsuki usado hoje é um monograma ilustrativo (não é
    uma foto real da proprietária). Substituir só após autorização explícita dela.
-4. **Fotos reais dos produtos**: as imagens atuais são ilustrativas (herdadas do protótipo V3),
-   não fotografias dos doces realmente vendidos.
-5. **Reabertura das reservas** (`dm_store_status.is_open=true`): decisão comercial da Mitsuki/
+4. **Fotos reais dos produtos**: a Mitsuki já pode cadastrar suas próprias fotos pelo painel (ver
+   "Cadastro de produtos e fotos" acima); os 5 produtos originais continuam com as imagens
+   ilustrativas do protótipo V3 até ela enviar uma foto real de cada um.
+5. **Foto do docinho de leite Ninho**: não encontrei, nesta sessão, uma foto real da Mitsuki nem uma
+   imagem ilustrativa com licença comercial verificável que representasse fielmente o doce vendido
+   (sem acesso a rede para pesquisar/baixar de um banco de imagens licenciado, e para não arriscar
+   usar uma foto de receita/concorrente com cobertura ou recheio diferente do que ela realmente
+   entrega). Mantive a imagem provisória atual (`assets/img/ninho.webp`) sem alteração — ver o brief
+   completo de captura em `04_BRIEF_FOTO_NINHO.md` (pacote enviado nesta rodada): peço à Mitsuki uma
+   foto própria de 2 a 4 docinhos, luz natural, fundo neutro, na apresentação real que ela vende, ou
+   me envie diretamente que eu cadastro pelo painel (agora já existe upload de foto).
+6. **Reabertura das reservas** (`dm_store_status.is_open=true`): decisão comercial da Mitsuki/
    TaskZap, feita deliberadamente fora desta sessão, só depois que os itens acima estiverem
    resolvidos e o primeiro teste real autorizado.
-6. **Teste real do login e do fluxo de WhatsApp pelo navegador**: confirmar em
-   `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um navegador/celular real,
-   que o login funciona, que uma reserva real é criada e que o botão do WhatsApp abre a conversa
-   corretamente — ver "Testes executados" acima para o porquê disso não ter sido possível validar
-   diretamente desta sessão (sem saída de rede para `supabase.co`/`*.pages.dev`).
-7. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
+7. **Teste real do login, do cadastro de produto com foto e do fluxo de WhatsApp pelo navegador**:
+   confirmar em `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um
+   navegador/celular real, que o login funciona, que um produto pode ser cadastrado com foto de
+   verdade (upload real no bucket), que uma reserva real é criada e que o botão do WhatsApp abre a
+   conversa corretamente — ver "Testes executados" acima para o porquê disso não ter sido possível
+   validar diretamente desta sessão (sem saída de rede para `supabase.co`/`*.pages.dev`).
+8. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
    fizer sentido pelo volume esperado — ver seção "Login do painel" acima.
+9. **Migração de isolamento entre lojas (`product_media`)**: `PROPOSTA_dm_product_media_tenant_guard.sql`
+   está pronta mas não aplicada — decisão do GL sobre aplicá-la ao banco compartilhado, já que afeta
+   todas as lojas do projeto Supabase, não só a NK Doces (ver "Cadastro de produtos e fotos" acima).
 
 ## Cloudflare Pages
 

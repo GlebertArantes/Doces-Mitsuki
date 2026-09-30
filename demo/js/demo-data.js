@@ -7,11 +7,6 @@
 // isolada e incapaz de gravar nada.
 export const DEMO_PRODUCTS = [
   {
-    id: 'p-ready', name: 'Caixinha pronta · 4 docinhos', slug: 'caixinha-pronta-4-docinhos',
-    description: 'Escolha rápida, já montada para você. [DEMO] preço e sabores a confirmar com a Mitsuki.',
-    price: 18.00, kind: 'ready_box', boxSlotCount: null, isAvailable: true, image: '../assets/img/ready.webp',
-  },
-  {
     id: 'p-custom', name: 'Monte sua caixinha · 4 docinhos', slug: 'monte-sua-caixinha-4-docinhos',
     description: 'Escolha quatro sabores, iguais ou diferentes. [DEMO] preço a confirmar com a Mitsuki.',
     price: 18.00, kind: 'buildable_box', boxSlotCount: 4, isAvailable: true, image: '../assets/img/custom.webp',
@@ -37,7 +32,6 @@ export const DEMO_PRODUCTS = [
 ];
 
 export const DEMO_STORE_STATUS = {
-  is_open: true,
   pickup_instructions: 'Retirada diretamente com a Mitsuki, na Brago.',
   pix_key: null,
 };

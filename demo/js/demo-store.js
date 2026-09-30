@@ -20,7 +20,7 @@ const SWEET_STYLE = {
 
 // Estoque simulado em memória (nunca sincronizado com o Supabase), só pra
 // a demonstração de "esgotado" fazer sentido dentro da própria sessão.
-const DEMO_STOCK = { 'p-ready': 8, 'p-brig': 12, 'p-beij': 9, 'p-ninho': 7 };
+const DEMO_STOCK = { 'p-brig': 12, 'p-beij': 9, 'p-ninho': 7 };
 
 let storeStatus = DEMO_STORE_STATUS;
 let products = DEMO_PRODUCTS.map(p => ({ ...p }));
@@ -31,7 +31,10 @@ let builderSlots = 4;
 let builderBoxProduct = null;
 let activeSlot = 0;
 let demoSeq = 1;
+let pendingQty = {};
 let toastHandle;
+
+const MAX_PENDING_QTY = 20;
 
 const CART_KEY = 'doces_mitsuki_demo_cart_v1';
 function loadCart() {
@@ -54,7 +57,7 @@ function notify(message) {
 }
 
 function idOf(item) {
-  if (item.kind === 'ready_box' || item.kind === 'flavor') return item.kind + ':' + item.productId;
+  if (item.kind === 'flavor') return 'flavor:' + item.productId;
   return 'buildable_box:' + item.productId + ':' + item.flavors.slice().sort().join('+');
 }
 function lineName(item) {
@@ -70,7 +73,7 @@ function cartTotal() { return cart.reduce((n, i) => n + i.qty * unitPrice(i), 0)
 function reservedInCart(productId) {
   let n = 0;
   for (const i of cart) {
-    if ((i.kind === 'ready_box' || i.kind === 'flavor') && i.productId === productId) n += i.qty;
+    if (i.kind === 'flavor' && i.productId === productId) n += i.qty;
     if (i.kind === 'buildable_box') n += i.flavors.filter(f => f === productId).length * i.qty;
   }
   return n;
@@ -84,65 +87,67 @@ function isAvailable(productId) {
 function flavorList() { return products.filter(p => p.kind === 'flavor'); }
 function canBuildBox() { return flavorList().some(f => isAvailable(f.id)); }
 
+function pendingCount() { return Object.values(pendingQty).reduce((n, q) => n + q, 0); }
+function pendingTotal() {
+  return Object.entries(pendingQty).reduce((sum, [id, q]) => {
+    const p = products.find(x => x.id === id);
+    return sum + (p ? p.price * q : 0);
+  }, 0);
+}
+
 function render() {
   const count = cartCount();
   $('cart-dot').textContent = count;
   $('cart-dot').classList.toggle('hidden', !count);
-  $('basket-bar').classList.toggle('hidden', !count);
+
+  const pending = pendingCount();
+  $('selection-bar').classList.toggle('hidden', !pending);
+  if (pending) {
+    $('selection-count').textContent = pending + ' ' + (pending === 1 ? 'doce selecionado' : 'doces selecionados');
+    $('selection-total').textContent = money(pendingTotal());
+  }
+  $('basket-bar').classList.toggle('hidden', !count || pending > 0);
   $('basket-count').textContent = count + ' ' + (count === 1 ? 'item no seu carrinho (demo)' : 'itens no seu carrinho (demo)');
   $('basket-total').textContent = money(cartTotal());
 
-  const open = !!storeStatus.is_open;
-  $('store-status').classList.toggle('closed', !open);
-  $('store-status').innerHTML = open
-    ? '<div><strong><span class="green-dot"></span>Hoje tem docinhos! 🍬</strong><p>Prévia de demonstração — escolha à vontade, nada é reservado de verdade.</p></div><span class="badge">● Aberto (demo)</span>'
-    : '<div><strong><span class="green-dot"></span>Sem pronta entrega agora</strong><p>Prévia de demonstração.</p></div><span class="badge">Fechado</span>';
+  $('store-status').classList.remove('closed');
+  $('store-status').innerHTML = '<div><strong><span class="green-dot"></span>Hoje tem docinhos! 🍬</strong><p>Prévia de demonstração — escolha à vontade, nada é reservado de verdade.</p></div><span class="badge">● Sempre disponível (demo)</span>';
   $('pickup-wrap').classList.remove('hidden');
   $('pickup-display').innerHTML = '📍 Retirada: <b>' + esc(storeStatus.pickup_instructions) + '</b>';
 
   const p = [];
   if (filter !== 'single') {
-    for (const box of products.filter(x => x.kind === 'ready_box')) {
-      const left = isAvailable(box.id);
-      p.push(`<article class="product"><div class="product-img"><img src="${box.image || ''}" alt="Imagem ilustrativa de caixinha com quatro docinhos"><span class="photo-overlay"></span><span class="product-ribbon">Caixinha pronta</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha rápida, já montada para você.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn" data-add-ready="${esc(box.id)}" aria-label="Adicionar ${esc(box.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
-    }
     for (const box of products.filter(x => x.kind === 'buildable_box')) {
       const canBuild = canBuildBox();
-      p.push(`<article class="product"><div class="product-img"><img src="${box.image || ''}" alt="Imagem ilustrativa de caixinha montada com quatro docinhos variados"><span class="photo-overlay"></span><span class="product-ribbon">Do seu jeito ♡</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha quatro sabores, iguais ou diferentes.</p><div class="stock ${!canBuild ? 'out' : ''}">${!canBuild ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn build" data-build="${esc(box.id)}" ${!open || !canBuild ? 'disabled' : ''}>Montar</button></div></div></article>`);
+      p.push(`<article class="product"><div class="product-img"><img src="${box.image || ''}" alt="Imagem ilustrativa de caixinha montada com quatro docinhos variados"><span class="photo-overlay"></span><span class="product-ribbon">Do seu jeito ♡</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha quatro sabores, iguais ou diferentes.</p><div class="stock ${!canBuild ? 'out' : ''}">${!canBuild ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn build" data-build="${esc(box.id)}" ${!canBuild ? 'disabled' : ''}>Montar</button></div></div></article>`);
     }
   }
   if (filter !== 'boxes') {
     for (const s of flavorList()) {
       const left = isAvailable(s.id);
+      const qty = pendingQty[s.id] || 0;
       const style = SWEET_STYLE[s.slug] || { emoji: '🍬', color: '#9d5f45' };
-      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div><img class="sweet-photo" loading="lazy" decoding="async" src="${s.image || ''}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()"><span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><button class="addbtn" data-add-single="${esc(s.id)}" aria-label="Adicionar ${esc(s.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
+      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div><img class="sweet-photo" loading="lazy" decoding="async" src="${s.image || ''}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()"><span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><div class="qty-stepper"><button data-qty-dec="${esc(s.id)}" aria-label="Diminuir quantidade selecionada de ${esc(s.name)}" ${qty <= 0 ? 'disabled' : ''}>−</button><b>${qty}</b><button data-qty-inc="${esc(s.id)}" aria-label="Aumentar quantidade selecionada de ${esc(s.name)}" ${!left || qty >= MAX_PENDING_QTY ? 'disabled' : ''}>+</button></div></div></div></article>`);
     }
   }
   $('products').innerHTML = p.join('') || '<div class="blank" style="grid-column:1/-1">Nenhum produto nesta categoria.</div>';
   document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('selected', b.dataset.filter === filter));
 }
 
-function addReady(productId) {
-  const box = products.find(p => p.id === productId);
-  if (!box) return;
-  if (!isAvailable(productId)) return notify('Esgotado nesta demonstração.');
-  const key = idOf({ kind: 'ready_box', productId });
-  const found = cart.find(i => idOf(i) === key);
-  const nextQty = (found?.qty || 0) + 1;
-  if (nextQty > (DEMO_STOCK[productId] ?? Infinity)) return notify('Estoque de demonstração esgotado.');
-  if (found) found.qty++;
-  else cart.push({ kind: 'ready_box', productId, name: box.name, price: box.price, qty: 1 });
-  persistCart(); render(); notify('Adicionado ao carrinho (demo) ♡');
-}
-function addSingle(productId) {
-  const flavor = products.find(p => p.id === productId);
-  if (!flavor) return;
-  if (!isAvailable(productId)) return notify('Esgotado nesta demonstração.');
-  const key = idOf({ kind: 'flavor', productId });
-  const found = cart.find(i => idOf(i) === key);
-  if (found) found.qty++;
-  else cart.push({ kind: 'flavor', productId, name: flavor.name, price: flavor.price, qty: 1 });
-  persistCart(); render(); notify('Adicionado ao carrinho (demo) ♡');
+function addSelectionToCart() {
+  const ids = Object.keys(pendingQty).filter(id => pendingQty[id] > 0);
+  if (!ids.length) return;
+  for (const id of ids) {
+    const flavor = products.find(p => p.id === id);
+    if (!flavor) continue;
+    const key = idOf({ kind: 'flavor', productId: id });
+    const found = cart.find(i => idOf(i) === key);
+    if (found) found.qty += pendingQty[id];
+    else cart.push({ kind: 'flavor', productId: id, name: flavor.name, price: flavor.price, qty: pendingQty[id] });
+  }
+  pendingQty = {};
+  persistCart(); render();
+  notify('Seleção adicionada ao carrinho (demo) ♡');
 }
 
 function openModal(html) {
@@ -178,7 +183,7 @@ function showBuilder(boxProductId) {
 
 function showCart() {
   if (!cart.length) return notify('Seu carrinho está vazio.');
-  openModal(sheetTitle('Seu carrinho 🛍️ (demo)') + `<p class="extra">Revise seus docinhos — isto é uma demonstração, nada será reservado de verdade.</p>${cart.map(i => `<div class="cart-item"><div><strong>${esc(lineName(i))}</strong><small>${money(unitPrice(i) * i.qty)}</small></div><div class="stepper"><button data-cart-down="${esc(idOf(i))}" aria-label="Diminuir quantidade">−</button><b>${i.qty}</b><button data-cart-up="${esc(idOf(i))}" aria-label="Aumentar quantidade">+</button></div></div>`).join('')}<div class="sumline"><span>Total do pedido</span><strong>${money(cartTotal())}</strong></div><div class="notice">🧪 Demonstração: esta reserva não será enviada à Mitsuki, nem cobrará Pix, nem baixa estoque real.</div><button class="button full" id="go-checkout" ${!storeStatus.is_open ? 'disabled' : ''}>Continuar (demo) →</button>`);
+  openModal(sheetTitle('Seu carrinho 🛍️ (demo)') + `<p class="extra">Revise seus docinhos — isto é uma demonstração, nada será reservado de verdade.</p>${cart.map(i => `<div class="cart-item"><div><strong>${esc(lineName(i))}</strong><small>${money(unitPrice(i) * i.qty)}</small></div><div class="stepper"><button data-cart-down="${esc(idOf(i))}" aria-label="Diminuir quantidade">−</button><b>${i.qty}</b><button data-cart-up="${esc(idOf(i))}" aria-label="Aumentar quantidade">+</button></div></div>`).join('')}<div class="sumline"><span>Total do pedido</span><strong>${money(cartTotal())}</strong></div><div class="notice">🧪 Demonstração: esta reserva não será enviada à Mitsuki, nem cobrará Pix, nem baixa estoque real.</div><button class="button full" id="go-checkout">Continuar (demo) →</button>`);
 }
 
 function checkout() {
@@ -196,7 +201,7 @@ function confirmReservationDemo(form) {
   // Só efeito local, sem persistência: decrementa o estoque simulado em
   // memória (perdido ao recarregar) para o "esgotado" fazer sentido na demo.
   for (const i of cart) {
-    if (i.kind === 'ready_box' || i.kind === 'flavor') {
+    if (i.kind === 'flavor') {
       if (DEMO_STOCK[i.productId] !== undefined) DEMO_STOCK[i.productId] -= i.qty;
     } else if (i.kind === 'buildable_box') {
       for (const f of i.flavors) if (DEMO_STOCK[f] !== undefined) DEMO_STOCK[f] -= i.qty;
@@ -238,8 +243,18 @@ document.addEventListener('click', e => {
   if (!b) return;
   if (b.dataset.filter) { filter = b.dataset.filter; return render(); }
   if (b.id === 'cart-head' || b.id === 'basket-open') return showCart();
-  if (b.dataset.addReady) return addReady(b.dataset.addReady);
-  if (b.dataset.addSingle) return addSingle(b.dataset.addSingle);
+  if (b.dataset.qtyInc) {
+    const id = b.dataset.qtyInc;
+    if (!isAvailable(id)) return notify('Esgotado nesta demonstração.');
+    pendingQty[id] = Math.min(MAX_PENDING_QTY, (pendingQty[id] || 0) + 1);
+    return render();
+  }
+  if (b.dataset.qtyDec) {
+    const id = b.dataset.qtyDec;
+    pendingQty[id] = Math.max(0, (pendingQty[id] || 0) - 1);
+    return render();
+  }
+  if (b.id === 'add-selection') return addSelectionToCart();
   if (b.dataset.build) { builder = []; activeSlot = 0; return showBuilder(b.dataset.build); }
   if (b.dataset.close !== undefined) return closeModal();
   if (b.dataset.slot !== undefined) { activeSlot = Number(b.dataset.slot); return showBuilder(builderBoxProduct.id); }

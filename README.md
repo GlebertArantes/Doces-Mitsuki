@@ -8,9 +8,11 @@ pagamento Pix com conferência manual.
 
 **Estado atual no Supabase (definido pela TaskZap/cliente, fora desta sessão — não alterado aqui):**
 `tenants.is_active = true` (nome comercial já é **NK Doces** no banco) e
-`dm_store_status.is_open = false` (reservas **fechadas**: o cardápio pode ser visto, mas o RPC de
-reserva ainda recusa qualquer pedido até a Mitsuki reabrir as vendas). Esta sessão não altera
-`is_active`, `is_open`, dados de pagamento nem estoque por conta própria.
+`dm_store_status.is_open = true` (reservas **abertas**; essa mudança foi feita fora desta sessão,
+não por mim — confirmada por auditoria somente leitura no início desta rodada). Esta sessão não
+altera `is_active`, `is_open`, dados de pagamento nem estoque por conta própria — ver também "Loja
+sempre disponível" na seção de cadastro de produtos, abaixo, sobre a remoção do controle manual de
+abrir/fechar do painel.
 
 Preços e sabores seguem os valores de demonstração do protótipo V3 aprovado, marcados como
 `[DEMO]` na descrição — ainda pendentes de confirmação com a Mitsuki.
@@ -194,18 +196,19 @@ alteração de código.
 - **Sabor novo entra automaticamente na "monte sua caixinha"**: o montador lê `products.filter(kind
   === 'flavor')` a partir do mesmo carregamento da vitrine — não existe lista separada, então um
   sabor avulso recém-publicado (com estoque) aparece nas opções assim que a página recarrega.
-- **Isolamento entre lojas (achado da auditoria desta rodada, corrigido em `esc()` e documentado à
-  parte para `product_media`)**: `product_media.tenant_id` e `product_media.product_id` são duas
-  chaves estrangeiras **independentes** — nada no schema/RLS de hoje impede, em tese, gravar
-  `tenant_id` de uma loja apontando para um produto de outra. Confirmado por auditoria somente
-  leitura que **não existe nenhuma linha assim hoje**, em nenhuma das lojas do projeto. Uma correção
-  mínima (trigger que rejeita essa combinação) está pronta em
-  `supabase/migrations/PROPOSTA_dm_product_media_tenant_guard.sql`, mas **não foi aplicada** — ela
-  afeta a tabela compartilhada `product_media`, usada por todas as lojas do projeto (Donna Store, EB
-  Fit, Nosso Closet, não só NK Doces), então fica sujeita a aprovação explícita antes de entrar no
-  banco compartilhado, como pedido. O código desta rodada (upload de foto da NK Doces) já sempre
-  grava o `tenant_id` correto, então não depende dessa correção para funcionar direito — ela é uma
-  camada de proteção a mais contra erro futuro, não um requisito para o que foi entregue agora.
+- **Isolamento entre lojas — corrigido nesta rodada**: `product_media.tenant_id` e
+  `product_media.product_id` eram duas chaves estrangeiras **independentes** — nada no schema/RLS
+  impedia, em tese, gravar `tenant_id` de uma loja apontando para um produto de outra. Confirmado
+  por auditoria somente leitura, em duas rodadas seguidas, que **nenhuma linha assim existia**, em
+  nenhuma das 435 linhas de `product_media` de todo o projeto (não só NK Doces). A correção — um
+  trigger `BEFORE INSERT/UPDATE` em `public.product_media` que rejeita qualquer gravação onde
+  `tenant_id` não bata com o dono real do produto — foi validada, recomendada e **aplicada** nesta
+  rodada (migração `0009_dm_guard_product_media_tenant.sql`), depois de um teste negativo real (uma
+  tentativa de inserção cruzada dentro de uma transação com `ROLLBACK`, nunca commitada) confirmar
+  que o trigger bloqueia exatamente o caso indevido. Ela afeta a tabela compartilhada, usada por
+  todas as lojas do projeto (Donna Store, EB Fit, Nosso Closet, não só NK Doces) — verificado que a
+  contagem de linhas (435) ficou idêntica antes e depois de aplicar, ou seja, nenhum dado existente
+  foi tocado; só bloqueia, dali em diante, a combinação indevida.
 - **Correção de bug encontrado nesta auditoria (não relacionado a fotos)**: `esc()` em `js/admin.js`
   mapeava `&` para `&lt;` em vez de `&amp;` — um nome de produto com `&` aparecia corrompido no
   painel (embora sem risco de XSS, já que `<`/`>`/`"`/`'` estavam corretos). Corrigido; testado com
@@ -215,6 +218,67 @@ alteração de código.
   no checkout aparecia no recibo da tela, mas nunca era passada para `buildWhatsAppMessage()` —
   `js/store.js` corrigido para incluir `*Referência:* <valor>` na mensagem do WhatsApp quando o
   campo é preenchido (linha some da mensagem quando o campo fica em branco, sem inventar valor).
+
+## Ajustes de UX: seleção por quantidade, sem caixinha pronta, loja sempre disponível
+
+Três mudanças de experiência nesta rodada, pedidas depois de testar a versão anterior:
+
+- **Seleção por quantidade antes do carrinho**: no cardápio de avulsos, o antigo botão único "+"
+  virou um contador `[-] N [+]` por sabor. Tocar no `+`/`-` só ajusta uma quantidade **pendente**,
+  local à tela — nada entra no carrinho ainda, e dá pra escolher vários sabores em quantidades
+  diferentes antes de decidir. Quando há pelo menos 1 unidade pendente em qualquer sabor, aparece
+  uma barra "Adicionar ao carrinho →" mostrando o total pendente (contagem + valor); tocar nela
+  transfere tudo de uma vez para o carrinho de verdade (mesclando com o que já estiver lá) e zera a
+  seleção pendente. O carrinho em si continua funcionando exatamente como antes (+/- normais,
+  totais, checkout). A "monte sua caixinha" não foi alterada — seu fluxo (escolher 4 sabores no
+  modal e tocar "Adicionar caixinha ao carrinho") já era deliberado e continua igual.
+- **Caixinha pronta retirada da experiência comercial**: o produto `kind=ready_box` não aparece mais
+  na vitrine (nem card, nem filtro, nem texto "Caixinha pronta"), no cadastro genérico do painel
+  (que agora só cria `flavor` — a opção "Tipo" foi removida do formulário, já que só existe um tipo
+  cadastrável) nem na prévia `/demo/`. **Nenhum dado foi apagado**: o produto `Caixinha pronta · 4
+  docinhos` já cadastrado continua existindo em `products`/`dm_product_ext`/`dm_stock` exatamente
+  como estava, visível e editável no painel (útil se um dia quiserem reativá-lo) — só não é mais
+  renderizado em nenhum código de vitrine/demo, mesmo que continue com `status='published'`. A
+  "monte sua caixinha" (`buildable_box`) e os docinhos avulsos (`flavor`) continuam exatamente como
+  antes.
+- **Loja sempre disponível — sem controle manual de abrir/fechar no painel**: o painel administrativo
+  não tem mais a seção "Pronta entrega" com o botão de ligar/desligar vendas. Ao auditar o banco no
+  início desta rodada, `dm_store_status.is_open` já estava `true` (mudança feita fora desta sessão,
+  não por mim). A decisão técnica foi: **não tocar em `is_open` nem em `dm_store_status`** — a tabela
+  e a checagem de segurança dentro de `dm_create_reservation` continuam exatamente como estavam
+  (confirmado que a função ainda recusa reservas com `store_closed` se `is_open` alguma vez voltar a
+  `false`); só a interface do painel parou de expor um jeito de a Mitsuki mexer nisso sozinha — o
+  mesmo padrão já usado para `tenants.is_active` ("é uma decisão comercial, feita pela TaskZap, fora
+  do painel"). `dm_store_status` é uma tabela isolada da NK Doces (auditoria confirmou: hoje só
+  existe 1 linha no projeto inteiro, a desta loja), então essa mudança de interface não tem nenhum
+  efeito sobre outros tenants.
+- **Painel — fotos só no formulário**: a listagem principal de produtos/estoque não mostra mais
+  miniatura de foto ao lado de cada item (pedido explícito, para deixar a lista mais enxuta no
+  celular) — o cadastro, a edição e o upload/troca de foto continuam funcionando normalmente dentro
+  do formulário de cada produto, e a foto de capa continua sendo usada normalmente na vitrine.
+
+## Foto do docinho de leite Ninho — pendente por bloqueio de rede
+
+Uma foto foi formalmente aprovada para uso: **"Sweet coconut balls topped with white cream"**, por
+**Jonathan Borba** (@jonathanborba), publicada no Unsplash sob a Unsplash License (uso gratuito,
+conforme a página da foto) —
+`https://unsplash.com/photos/sweet-coconut-balls-topped-with-white-cream-PzbjGm6EPhE`.
+
+**Não consegui aplicá-la nesta rodada**: o ambiente onde esta sessão roda tem uma política de rede
+que bloqueia qualquer conexão para `unsplash.com` — confirmado de duas formas independentes: um
+`curl` direto (`CONNECT tunnel failed, response 403`, com o proxy de saída explicitando
+"connect_rejected... organization policy") e uma tentativa de busca de página via ferramenta própria
+do Claude Code, que devolveu o erro explícito `EGRESS_BLOCKED` para o domínio `unsplash.com`. As
+duas apontam para a mesma causa — política de rede do ambiente, não uma falha pontual de uma URL
+específica. Como pedido explicitamente no anexo desta rodada, **não substituí por nenhuma outra
+imagem** — a foto provisória atual (`assets/img/ninho.webp`) continua exatamente como estava.
+
+**Para aplicar a foto aprovada**: alguém com acesso ao ambiente do Claude Code precisa liberar
+`unsplash.com` (ou pelo menos `images.unsplash.com`) nas configurações de rede do ambiente (menu do
+ambiente na barra de título da sessão → Editar → Acesso de rede), e então pedir para eu (ou a
+próxima sessão) baixar, otimizar em WebP e aplicar a imagem já aprovada acima — a referência
+completa (fonte, fotógrafo, licença) já está registrada neste README para isso não precisar ser
+reconfirmado depois.
 
 ## Branches
 
@@ -290,11 +354,12 @@ Migrações em `supabase/migrations/`, aplicadas nesta ordem:
    "+ Cadastrar produto" do painel — grava `products` + `dm_product_ext` + `dm_stock` numa única
    transação atômica, sempre com `status='hidden'`, valida nome/preço/estoque/categoria/tipo e
    gera um slug único dentro do tenant. Aditiva: nenhuma tabela ou política existente foi tocada.)
-
-**Proposta ainda não aplicada** (aguardando aprovação — ver seção "Cadastro de produtos e fotos"
-acima): `supabase/migrations/PROPOSTA_dm_product_media_tenant_guard.sql`, um trigger que fecha a
-lacuna encontrada nesta auditoria entre `product_media.tenant_id` e o tenant real do produto
-referenciado. Não numerada de propósito, para não passar a impressão de que já foi aplicada.
+9. `0009_dm_guard_product_media_tenant.sql` (trigger `BEFORE INSERT/UPDATE` em `public.product_media`
+   que rejeita qualquer linha cujo `tenant_id` não bata com o `tenant_id` real do produto referenciado
+   — fecha a lacuna de isolamento entre lojas encontrada em auditoria. Afeta a tabela compartilhada,
+   usada por todas as lojas do projeto, não só NK Doces; validada e recomendada em duas rodadas de
+   auditoria (0 violações em 435 linhas, nas duas vezes) e testada com uma tentativa negativa real
+   dentro de transação com `ROLLBACK` antes de aplicar — ver seção "Ajustes de UX" acima.)
 
 Dados de demonstração em `supabase/seed/demo_catalog.sql` (idempotente, seguro para reexecutar).
 
@@ -750,6 +815,47 @@ fosse produção):
   ambiente não tem saída de rede até `*.pages.dev`, então tudo acima rodou contra uma cópia local
   dos mesmos arquivos, servida por um HTTP server próprio, não contra o deploy real.
 
+**Nesta rodada** (seleção por quantidade, remoção da caixinha pronta, painel sem controle manual de
+abrir/fechar, remoção das miniaturas do painel, aplicação da migração de isolamento — sem tocar em
+`is_active`/`is_open`, sem alterar preços/estoque/Pix existentes, sem tocar em dados de outras
+lojas): mesmo procedimento — servidor HTTP local + Chromium real via Playwright, Supabase mockado
+em memória. 36 verificações automatizadas, todas aprovadas:
+
+- **Sem caixinha pronta em lugar nenhum**: com um produto `ready_box` publicado de propósito no
+  banco simulado (para confirmar que é o *código*, não a ausência de dado, que impede a exibição),
+  a vitrine não renderizou nenhum card nem texto "Caixinha pronta"; o mesmo confirmado na `/demo/`.
+- **Seletor de quantidade**: incrementar `+`/`-` em dois sabores diferentes (2 e 3 unidades) manteve
+  os contadores independentes e **não tocou o carrinho** (ícone do carrinho continuou zerado) até
+  tocar em "Adicionar ao carrinho →"; depois do toque, o carrinho passou a ter as 5 unidades de uma
+  vez, a barra de seleção pendente sumiu e os contadores dos cards voltaram a 0 — confirma
+  transferência em lote e reset da seleção pendente, exatamente como pedido.
+- **Caixinha personalizada intacta**: o fluxo "Montar" (escolher 4 sabores no modal, "Adicionar
+  caixinha ao carrinho") continua funcionando sem nenhuma mudança, coexistindo com o novo seletor de
+  quantidade dos avulsos.
+- **Totais corretos** após transferir uma seleção pendente para o carrinho (2× R$3,50 = R$7,00,
+  conferido na tela do carrinho, não só no cálculo interno).
+- **Loja sempre disponível**: com `is_open=true` (estado real confirmado por auditoria), o botão
+  "Confirmar reserva" segue clicável normalmente, sem nenhum controle manual no caminho.
+- **Painel sem "Pronta entrega"**: nem o texto "Pronta entrega" nem o elemento do switch
+  (`#toggle-open`) existem mais no HTML renderizado do painel.
+- **Painel sem miniaturas**: a listagem de estoque não renderiza nenhum elemento de foto
+  (`.inv-thumb`/`.mini-row-media`) — confirmado por contagem zero desses elementos.
+- **Cadastro só de avulso**: o formulário "+ Cadastrar produto" não tem mais o campo "Tipo"; um
+  produto criado por ele sempre grava `dm_product_ext.kind = 'flavor'` (confirmado direto no banco
+  simulado, não só na tela).
+- **Upload de foto continua funcionando na edição**, mesmo sem aparecer na listagem — testado
+  enviando uma foto no formulário de edição e confirmando a linha criada em `product_media` com
+  `is_cover=true`.
+- **Isolamento entre tenants (migração aplicada)**: verificado contra o Supabase de verdade (não
+  mock) — ver "Ajustes de UX" acima para os detalhes da aplicação e do teste negativo com
+  `ROLLBACK`.
+- **Overflow**: vitrine com a barra de seleção visível e painel sem o painel de abrir/fechar — 0
+  ocorrências em 320/360/375/390/430px e desktop (1280px).
+
+**Não testado nesta rodada** (mesma limitação de rede): o `wa.me` real, o round-trip real de reserva
+contra o Supabase publicado, o upload de foto real no bucket, e as páginas publicadas de verdade em
+`doces-mitsuki.pages.dev` — mesmas limitações já descritas nas rodadas anteriores.
+
 ## Pendências para ativação comercial
 
 1. ~~Conta de administração da Mitsuki~~ — **já existe** (`dm_admin_usernames`, username
@@ -761,28 +867,21 @@ fosse produção):
 4. **Fotos reais dos produtos**: a Mitsuki já pode cadastrar suas próprias fotos pelo painel (ver
    "Cadastro de produtos e fotos" acima); os 5 produtos originais continuam com as imagens
    ilustrativas do protótipo V3 até ela enviar uma foto real de cada um.
-5. **Foto do docinho de leite Ninho**: não encontrei, nesta sessão, uma foto real da Mitsuki nem uma
-   imagem ilustrativa com licença comercial verificável que representasse fielmente o doce vendido
-   (sem acesso a rede para pesquisar/baixar de um banco de imagens licenciado, e para não arriscar
-   usar uma foto de receita/concorrente com cobertura ou recheio diferente do que ela realmente
-   entrega). Mantive a imagem provisória atual (`assets/img/ninho.webp`) sem alteração — ver o brief
-   completo de captura em `04_BRIEF_FOTO_NINHO.md` (pacote enviado nesta rodada): peço à Mitsuki uma
-   foto própria de 2 a 4 docinhos, luz natural, fundo neutro, na apresentação real que ela vende, ou
-   me envie diretamente que eu cadastro pelo painel (agora já existe upload de foto).
-6. **Reabertura das reservas** (`dm_store_status.is_open=true`): decisão comercial da Mitsuki/
-   TaskZap, feita deliberadamente fora desta sessão, só depois que os itens acima estiverem
-   resolvidos e o primeiro teste real autorizado.
-7. **Teste real do login, do cadastro de produto com foto e do fluxo de WhatsApp pelo navegador**:
+5. **Foto do docinho de leite Ninho**: já há uma foto **aprovada** (Jonathan Borba, Unsplash License
+   — ver "Foto do docinho de leite Ninho — pendente por bloqueio de rede" acima), mas não pude
+   aplicá-la nesta rodada porque o ambiente onde esta sessão roda bloqueia conexões para
+   `unsplash.com` por política de rede. Mantive a imagem provisória atual (`assets/img/ninho.webp`)
+   sem alteração, como pedido explicitamente para o caso de impedimento técnico. Para resolver:
+   libere `unsplash.com` nas configurações de rede do ambiente e peça para aplicar a foto já aprovada
+   (fonte/fotógrafo/licença documentados acima, não precisa reconfirmar).
+6. **Teste real do login, do cadastro de produto com foto e do fluxo de WhatsApp pelo navegador**:
    confirmar em `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um
    navegador/celular real, que o login funciona, que um produto pode ser cadastrado com foto de
    verdade (upload real no bucket), que uma reserva real é criada e que o botão do WhatsApp abre a
    conversa corretamente — ver "Testes executados" acima para o porquê disso não ter sido possível
    validar diretamente desta sessão (sem saída de rede para `supabase.co`/`*.pages.dev`).
-8. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
+7. **Cloudflare Turnstile** (opcional): considerar ativar antes de abrir para pedidos reais, se
    fizer sentido pelo volume esperado — ver seção "Login do painel" acima.
-9. **Migração de isolamento entre lojas (`product_media`)**: `PROPOSTA_dm_product_media_tenant_guard.sql`
-   está pronta mas não aplicada — decisão do GL sobre aplicá-la ao banco compartilhado, já que afeta
-   todas as lojas do projeto Supabase, não só a NK Doces (ver "Cadastro de produtos e fotos" acima).
 
 ## Cloudflare Pages
 

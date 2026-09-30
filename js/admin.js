@@ -205,9 +205,6 @@ async function loadAll() {
 }
 
 function renderSettings() {
-  $('open-caption').textContent = storeStatus.is_open ? 'Clientes podem fazer reservas.' : 'Novas reservas estão pausadas.';
-  $('toggle-open').classList.toggle('on', storeStatus.is_open);
-  $('toggle-open').setAttribute('aria-pressed', String(storeStatus.is_open));
   $('settings-form').elements.pickup.value = storeStatus.pickup_instructions || '';
   $('settings-form').elements.pix.value = storeStatus.pix_key || '';
 }
@@ -232,14 +229,10 @@ function renderInventory() {
     const kindLabel = { ready_box: 'Caixinha pronta', buildable_box: 'Monte sua caixinha', flavor: 'Avulso' }[p.ext.kind] || '';
     const stockText = p.ext.kind === 'buildable_box' ? 'Usa o estoque dos sabores avulsos' : `${p.stock?.quantity_available ?? 0} un. disponíveis`;
     const catName = categories.find(c => c.id === p.category_id)?.name || '';
-    const cover = coverMedia(p.id);
-    const thumb = cover?.public_url
-      ? `<img src="${esc(cover.public_url)}" alt="" class="inv-thumb">`
-      : `<div class="inv-thumb inv-thumb-empty" aria-hidden="true">🍬</div>`;
     const statusPill = p.status === 'published'
       ? '<span class="status-pill on">Publicado</span>'
       : '<span class="status-pill off">Oculto</span>';
-    return `<div class="mini-row"><div class="mini-row-media">${thumb}</div><div><strong>${esc(p.name)}</strong><small>${esc(kindLabel)}${catName ? ' · ' + esc(catName) : ''} · ${stockText} · ${money(p.price)}</small><div>${statusPill}</div></div><div class="mini-row-actions"><button class="edit-btn" data-toggle-publish="${esc(p.id)}">${p.status === 'published' ? 'Ocultar' : 'Publicar'}</button><button class="edit-btn" data-edit-product="${esc(p.id)}">Editar</button></div></div>`;
+    return `<div class="mini-row"><div><strong>${esc(p.name)}</strong><small>${esc(kindLabel)}${catName ? ' · ' + esc(catName) : ''} · ${stockText} · ${money(p.price)}</small><div>${statusPill}</div></div><div class="mini-row-actions"><button class="edit-btn" data-toggle-publish="${esc(p.id)}">${p.status === 'published' ? 'Ocultar' : 'Publicar'}</button><button class="edit-btn" data-edit-product="${esc(p.id)}">Editar</button></div></div>`;
   }).join('');
 }
 
@@ -285,10 +278,7 @@ function showCreateProductForm() {
     <p class="hint">JPEG, PNG ou WebP, até 8&nbsp;MB. Sem foto, o cardápio mostra um ícone neutro no lugar.</p>
     <label class="field">Nome<input name="name" maxlength="120" required placeholder="Ex.: Cajuzinho"></label>
     <label class="field">Descrição<textarea name="description" maxlength="240" placeholder="Opcional"></textarea></label>
-    <label class="field">Tipo<select name="kind" required>
-      <option value="flavor">Docinho avulso</option>
-      <option value="ready_box">Caixinha pronta</option>
-    </select></label>
+    <p class="hint">Este formulário cadastra docinhos avulsos. A "monte sua caixinha" é uma funcionalidade especial já existente, feita a partir dos sabores avulsos publicados.</p>
     <label class="field">Categoria<select name="category" required><option value="" disabled selected>Escolha uma categoria</option>${catOptions}</select></label>
     <label class="field">Preço (R$)<input name="price" inputmode="decimal" required placeholder="Ex.: 3,50"></label>
     <label class="field">Estoque disponível agora<input name="stock" type="number" min="0" max="9999" step="1" required value="0"></label>
@@ -311,7 +301,7 @@ async function createProduct(form) {
   if (creatingProduct) return;
   const name = form.elements.name.value.trim();
   const description = form.elements.description.value.trim();
-  const kind = form.elements.kind.value;
+  const kind = 'flavor';
   const categoryId = form.elements.category.value;
   const rawPrice = form.elements.price.value.trim().replace(/\s/g, '').replace(',', '.');
   const price = Number(rawPrice);
@@ -400,19 +390,6 @@ function renderOrders() {
 function openModal(html) { $('sheet').innerHTML = '<div class="sheet-handle"></div>' + html; $('overlay').classList.remove('hidden'); document.body.classList.add('no-scroll'); }
 function closeModal() { $('overlay').classList.add('hidden'); $('sheet').innerHTML = ''; document.body.classList.remove('no-scroll'); }
 function sheetTitle(t) { return `<div class="sheet-head"><h2>${t}</h2><button class="close" data-close aria-label="Fechar">×</button></div>`; }
-
-async function toggleOpen() {
-  const nextOpen = !storeStatus.is_open;
-  const { error } = await supabase.from('dm_store_status').upsert({
-    tenant_id: tenant.id, is_open: nextOpen,
-    pickup_instructions: storeStatus.pickup_instructions, pix_key: storeStatus.pix_key,
-    updated_by: session.user.id,
-  }, { onConflict: 'tenant_id' });
-  if (error) return notify('Não foi possível atualizar. Tente novamente.');
-  storeStatus.is_open = nextOpen;
-  renderSettings();
-  notify(nextOpen ? 'Lojinha aberta para reservas.' : 'Novas reservas pausadas.');
-}
 
 async function saveSettings(form) {
   const pickup = form.elements.pickup.value.trim();
@@ -523,7 +500,6 @@ document.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.id === 'logout-btn') { supabase.auth.signOut().then(() => renderAuthScreen()); return; }
-  if (b.id === 'toggle-open') return toggleOpen();
   if (b.id === 'new-product-btn') return showCreateProductForm();
   if (b.dataset.editProduct) return editProduct(b.dataset.editProduct);
   if (b.dataset.togglePublish) return togglePublish(b.dataset.togglePublish);

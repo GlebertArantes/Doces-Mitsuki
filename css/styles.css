@@ -52,3 +52,12 @@
 .photo-field .field{margin-bottom:0}
 .photo-field .field span{display:block;margin-bottom:4px}
 .img-placeholder{font-size:34px;opacity:.55;z-index:1}
+
+/* Seletor de quantidade pendente na vitrine + barra "Adicionar seleção" */
+.qty-stepper{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.qty-stepper button{width:30px;height:30px;border:1px solid #eddae0;border-radius:9px;background:#fff;color:var(--rose);font-size:16px;font-weight:800;line-height:1}
+.qty-stepper b{font-size:13px;min-width:14px;text-align:center}
+.selection-bar{position:sticky;bottom:91px;z-index:4;background:var(--rose);color:white;margin:18px 20px 0;padding:13px 14px;border-radius:16px;box-shadow:0 12px 30px #ad476c3d;display:flex;align-items:center;gap:10px;justify-content:space-between}
+.selection-bar strong{display:block;font-size:12px}
+.selection-bar small{display:block;font-size:10px;color:#ffe3ec;margin-top:4px}
+.selection-bar button{border:0;background:white;color:#9c3f60;font-size:11px;font-weight:900;border-radius:10px;padding:10px 13px;white-space:nowrap}

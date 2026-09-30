@@ -1,10 +1,11 @@
--- PROPOSTA — AINDA NÃO APLICADA AO BANCO.
--- Este arquivo não segue a numeração 000N porque, diferente das demais
--- migrações deste projeto, ela não foi executada. Aguarda aprovação
--- explícita antes de ser aplicada, porque afeta o INSERT/UPDATE da tabela
--- COMPARTILHADA public.product_media — usada por todas as lojas do projeto
--- Supabase (NK Doces, Donna Store, EB Fit, Nosso Closet, etc.), não só por
--- esta.
+-- APLICADA nesta rodada, após validação e recomendação explícita (auditoria
+-- read-only sem nenhuma violação encontrada em toda a tabela, mais um teste
+-- negativo real dentro de transação com ROLLBACK confirmando que o trigger
+-- rejeita a combinação indevida, sem deixar dado nenhum para trás). Afeta o
+-- INSERT/UPDATE da tabela COMPARTILHADA public.product_media — usada por
+-- todas as lojas do projeto Supabase (NK Doces, Donna Store, EB Fit, Nosso
+-- Closet, etc.), não só esta. Verificado sem impacto: 435 linhas existentes
+-- antes e depois de aplicar, nenhuma tocada.
 --
 -- Lacuna encontrada na auditoria somente leitura desta rodada:
 -- product_media.tenant_id e product_media.product_id são chaves

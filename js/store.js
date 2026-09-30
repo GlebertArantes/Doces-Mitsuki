@@ -29,7 +29,10 @@ let builderBoxProduct = null;
 let activeSlot = 0;
 let lastReservation = null;
 let lastWhatsAppMessage = '';
+let pendingQty = {};
 let toastHandle;
+
+const MAX_PENDING_QTY = 20;
 
 const CART_KEY = 'doces_mitsuki_cart_v1';
 function loadCart() {
@@ -52,7 +55,7 @@ function notify(message) {
 }
 
 function idOf(item) {
-  if (item.kind === 'ready_box' || item.kind === 'flavor') return item.kind + ':' + item.productId;
+  if (item.kind === 'flavor') return 'flavor:' + item.productId;
   return 'buildable_box:' + item.productId + ':' + item.flavors.slice().sort().join('+');
 }
 function lineName(item) {
@@ -131,11 +134,26 @@ function canBuildBox(boxProduct) {
   return flavorList().filter(f => f.isAvailable).length > 0; // real check happens server-side
 }
 
+function pendingCount() { return Object.values(pendingQty).reduce((n, q) => n + q, 0); }
+function pendingTotal() {
+  return Object.entries(pendingQty).reduce((sum, [id, q]) => {
+    const p = products.find(x => x.id === id);
+    return sum + (p ? p.price * q : 0);
+  }, 0);
+}
+
 function render() {
   const count = cartCount();
   $('cart-dot').textContent = count;
   $('cart-dot').classList.toggle('hidden', !count);
-  $('basket-bar').classList.toggle('hidden', !count);
+
+  const pending = pendingCount();
+  $('selection-bar').classList.toggle('hidden', !pending);
+  if (pending) {
+    $('selection-count').textContent = pending + ' ' + (pending === 1 ? 'doce selecionado' : 'doces selecionados');
+    $('selection-total').textContent = money(pendingTotal());
+  }
+  $('basket-bar').classList.toggle('hidden', !count || pending > 0);
   $('basket-count').textContent = count + ' ' + (count === 1 ? 'item no seu carrinho' : 'itens no seu carrinho');
   $('basket-total').textContent = money(cartTotal());
 
@@ -149,11 +167,6 @@ function render() {
 
   const p = [];
   if (filter !== 'single') {
-    for (const box of products.filter(x => x.kind === 'ready_box')) {
-      const left = box.isAvailable;
-      const img = box.image ? `<img loading="lazy" decoding="async" src="${esc(box.image)}" alt="Imagem ilustrativa de caixinha com quatro docinhos" onerror="this.remove()">` : '<div class="img-placeholder" aria-hidden="true">🍬</div>';
-      p.push(`<article class="product"><div class="product-img">${img}<span class="photo-overlay"></span><span class="product-ribbon">Caixinha pronta</span></div><div class="product-main"><h3>${esc(box.name)}</h3><p class="product-desc">Escolha rápida, já montada para você.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(box.price)}</span><button class="addbtn" data-add-ready="${esc(box.id)}" aria-label="Adicionar ${esc(box.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
-    }
     for (const box of products.filter(x => x.kind === 'buildable_box')) {
       const canBuild = canBuildBox(box);
       const img = box.image ? `<img loading="lazy" decoding="async" src="${esc(box.image)}" alt="Imagem ilustrativa de caixinha montada com quatro docinhos variados" onerror="this.remove()">` : '<div class="img-placeholder" aria-hidden="true">🍬</div>';
@@ -163,8 +176,9 @@ function render() {
   if (filter !== 'boxes') {
     for (const s of flavorList()) {
       const left = s.isAvailable;
+      const qty = pendingQty[s.id] || 0;
       const style = SWEET_STYLE[s.slug] || { emoji: '🍬', color: '#9d5f45' };
-      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div>${s.image ? `<img class="sweet-photo" loading="lazy" decoding="async" src="${esc(s.image)}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()">` : ''}<span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><button class="addbtn" data-add-single="${esc(s.id)}" aria-label="Adicionar ${esc(s.name)}" ${!open || !left ? 'disabled' : ''}>+</button></div></div></article>`);
+      p.push(`<article class="product"><div class="product-img tint"><div class="sweet-art" style="--sweet:${esc(style.color)}">${esc(style.emoji)}</div>${s.image ? `<img class="sweet-photo" loading="lazy" decoding="async" src="${esc(s.image)}" alt="Imagem ilustrativa de ${esc(s.name)}" onerror="this.remove()">` : ''}<span class="photo-overlay"></span><span class="product-ribbon">Avulso</span></div><div class="product-main"><h3>${esc(s.name)}</h3><p class="product-desc">Uma unidade para adoçar sua pausa.</p><div class="stock ${!left ? 'out' : ''}">${!left ? 'Esgotado' : ''}</div><div class="product-foot"><span class="price">${money(s.price)}</span><div class="qty-stepper"><button data-qty-dec="${esc(s.id)}" aria-label="Diminuir quantidade selecionada de ${esc(s.name)}" ${qty <= 0 ? 'disabled' : ''}>−</button><b>${qty}</b><button data-qty-inc="${esc(s.id)}" aria-label="Aumentar quantidade selecionada de ${esc(s.name)}" ${!open || !left || qty >= MAX_PENDING_QTY ? 'disabled' : ''}>+</button></div></div></div></article>`);
     }
   }
   $('products').innerHTML = p.join('') || '<div class="blank" style="grid-column:1/-1">Nenhum produto nesta categoria.</div>';
@@ -173,25 +187,21 @@ function render() {
   document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('selected', b.dataset.filter === filter));
 }
 
-function addReady(productId) {
-  const box = products.find(p => p.id === productId);
-  if (!box) return;
+function addSelectionToCart() {
+  const ids = Object.keys(pendingQty).filter(id => pendingQty[id] > 0);
+  if (!ids.length) return;
   if (!storeStatus.is_open) return notify('As reservas estão fechadas no momento.');
-  const key = idOf({ kind: 'ready_box', productId });
-  const found = cart.find(i => idOf(i) === key);
-  if (found) found.qty++;
-  else cart.push({ kind: 'ready_box', productId, name: box.name, price: box.price, qty: 1 });
-  persistCart(); render(); notify('Adicionado ao carrinho ♡');
-}
-function addSingle(productId) {
-  const flavor = products.find(p => p.id === productId);
-  if (!flavor) return;
-  if (!storeStatus.is_open) return notify('As reservas estão fechadas no momento.');
-  const key = idOf({ kind: 'flavor', productId });
-  const found = cart.find(i => idOf(i) === key);
-  if (found) found.qty++;
-  else cart.push({ kind: 'flavor', productId, name: flavor.name, price: flavor.price, qty: 1 });
-  persistCart(); render(); notify('Adicionado ao carrinho ♡');
+  for (const id of ids) {
+    const flavor = products.find(p => p.id === id);
+    if (!flavor) continue;
+    const key = idOf({ kind: 'flavor', productId: id });
+    const found = cart.find(i => idOf(i) === key);
+    if (found) found.qty += pendingQty[id];
+    else cart.push({ kind: 'flavor', productId: id, name: flavor.name, price: flavor.price, qty: pendingQty[id] });
+  }
+  pendingQty = {};
+  persistCart(); render();
+  notify('Seleção adicionada ao carrinho ♡');
 }
 
 function openModal(html) {
@@ -348,8 +358,18 @@ document.addEventListener('click', e => {
   if (!b) return;
   if (b.dataset.filter) { filter = b.dataset.filter; return render(); }
   if (b.id === 'cart-head' || b.id === 'basket-open') return showCart();
-  if (b.dataset.addReady) return addReady(b.dataset.addReady);
-  if (b.dataset.addSingle) return addSingle(b.dataset.addSingle);
+  if (b.dataset.qtyInc) {
+    if (!storeStatus.is_open) return notify('As reservas estão fechadas no momento.');
+    const id = b.dataset.qtyInc;
+    pendingQty[id] = Math.min(MAX_PENDING_QTY, (pendingQty[id] || 0) + 1);
+    return render();
+  }
+  if (b.dataset.qtyDec) {
+    const id = b.dataset.qtyDec;
+    pendingQty[id] = Math.max(0, (pendingQty[id] || 0) - 1);
+    return render();
+  }
+  if (b.id === 'add-selection') return addSelectionToCart();
   if (b.dataset.build) { builder = []; activeSlot = 0; return showBuilder(b.dataset.build); }
   if (b.dataset.close !== undefined) return closeModal();
   if (b.dataset.slot !== undefined) { activeSlot = Number(b.dataset.slot); return showBuilder(builderBoxProduct.id); }

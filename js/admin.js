@@ -7,7 +7,6 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<':
 
 let tenant = null;
 let session = null;
-let storeStatus = null;
 let inventory = [];
 let categories = [];
 let mediaByProduct = {};
@@ -177,8 +176,7 @@ async function boot() {
 }
 
 async function loadAll() {
-  const [{ data: statusRow }, { data: prods }, { data: ext }, { data: stock }, { data: cats }, { data: media }, { data: reservations }, { data: report }] = await Promise.all([
-    supabase.from('dm_store_status').select('*').eq('tenant_id', tenant.id).maybeSingle(),
+  const [{ data: prods }, { data: ext }, { data: stock }, { data: cats }, { data: media }, { data: reservations }, { data: report }] = await Promise.all([
     supabase.from('products').select('id, name, slug, description, price, status, category_id').eq('tenant_id', tenant.id).order('created_at'),
     supabase.from('dm_product_ext').select('*').eq('tenant_id', tenant.id),
     supabase.from('dm_stock').select('*').eq('tenant_id', tenant.id),
@@ -188,7 +186,6 @@ async function loadAll() {
     supabase.from('dm_sales_report').select('*').eq('tenant_id', tenant.id).maybeSingle(),
   ]);
 
-  storeStatus = statusRow || { is_open: false, pickup_instructions: '', pix_key: null };
   const extById = Object.fromEntries((ext || []).map(e => [e.product_id, e]));
   const stockById = Object.fromEntries((stock || []).map(s => [s.product_id, s]));
   inventory = (prods || []).map(p => ({ ...p, ext: extById[p.id] || {}, stock: stockById[p.id] || null }));
@@ -197,24 +194,17 @@ async function loadAll() {
   for (const m of (media || [])) (mediaByProduct[m.product_id] ||= []).push(m);
   orders = reservations || [];
 
-  renderSettings();
   renderStats(report);
   renderPublishStatus();
   renderInventory();
   renderOrders();
 }
 
-function renderSettings() {
-  $('settings-form').elements.pickup.value = storeStatus.pickup_instructions || '';
-  $('settings-form').elements.pix.value = storeStatus.pix_key || '';
-}
-
 function renderStats(report) {
   const pendentes = report?.total_pendentes ?? 0;
   const recebido = (report?.total_recebido_cents ?? 0) / 100;
-  const boxStock = inventory.find(p => p.ext.kind === 'ready_box')?.stock?.quantity_available ?? 0;
   const flavorStock = inventory.filter(p => p.ext.kind === 'flavor').reduce((n, p) => n + (p.stock?.quantity_available ?? 0), 0);
-  $('stats').innerHTML = `<div class="stat"><small>Reservas para retirar</small><strong>${pendentes}</strong></div><div class="stat"><small>Pix confirmado</small><strong>${money(recebido)}</strong></div><div class="stat"><small>Caixinhas prontas</small><strong>${boxStock}</strong></div><div class="stat"><small>Docinhos avulsos</small><strong>${flavorStock}</strong></div>`;
+  $('stats').innerHTML = `<div class="stat"><small>Reservas para retirar</small><strong>${pendentes}</strong></div><div class="stat"><small>Pix confirmado</small><strong>${money(recebido)}</strong></div><div class="stat"><small>Docinhos disponíveis</small><strong>${flavorStock}</strong></div>`;
 }
 
 function renderPublishStatus() {
@@ -225,7 +215,7 @@ function renderPublishStatus() {
 }
 
 function renderInventory() {
-  $('inventory').innerHTML = inventory.map(p => {
+  $('inventory').innerHTML = inventory.filter(p => p.ext.kind !== 'ready_box').map(p => {
     const kindLabel = { ready_box: 'Caixinha pronta', buildable_box: 'Monte sua caixinha', flavor: 'Avulso' }[p.ext.kind] || '';
     const stockText = p.ext.kind === 'buildable_box' ? 'Usa o estoque dos sabores avulsos' : `${p.stock?.quantity_available ?? 0} un. disponíveis`;
     const catName = categories.find(c => c.id === p.category_id)?.name || '';
@@ -391,20 +381,6 @@ function openModal(html) { $('sheet').innerHTML = '<div class="sheet-handle"></d
 function closeModal() { $('overlay').classList.add('hidden'); $('sheet').innerHTML = ''; document.body.classList.remove('no-scroll'); }
 function sheetTitle(t) { return `<div class="sheet-head"><h2>${t}</h2><button class="close" data-close aria-label="Fechar">×</button></div>`; }
 
-async function saveSettings(form) {
-  const pickup = form.elements.pickup.value.trim();
-  const pix = form.elements.pix.value.trim();
-  if (!pickup) return notify('Informe a orientação de retirada.');
-  const { error } = await supabase.from('dm_store_status').upsert({
-    tenant_id: tenant.id, is_open: storeStatus.is_open,
-    pickup_instructions: pickup, pix_key: pix || null, updated_by: session.user.id,
-  }, { onConflict: 'tenant_id' });
-  if (error) return notify('Não foi possível salvar. Tente novamente.');
-  storeStatus.pickup_instructions = pickup;
-  storeStatus.pix_key = pix || null;
-  notify('Configurações salvas.');
-}
-
 let savingProduct = false;
 async function saveProduct(form) {
   if (savingProduct) return;
@@ -510,7 +486,6 @@ document.addEventListener('change', e => {
   if (e.target.matches('[data-order-status]')) setOrderStatus(e.target.dataset.orderStatus, e.target.value);
 });
 document.addEventListener('submit', e => {
-  if (e.target.id === 'settings-form') { e.preventDefault(); return saveSettings(e.target); }
   if (e.target.id === 'edit-product-form') { e.preventDefault(); return saveProduct(e.target); }
   if (e.target.id === 'create-product-form') { e.preventDefault(); return createProduct(e.target); }
 });

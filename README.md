@@ -257,6 +257,64 @@ Três mudanças de experiência nesta rodada, pedidas depois de testar a versão
   celular) — o cadastro, a edição e o upload/troca de foto continuam funcionando normalmente dentro
   do formulário de cada produto, e a foto de capa continua sendo usada normalmente na vitrine.
 
+## Painel simplificado: sem configurações gerais de retirada/Pix
+
+Rodada de limpeza da experiência da Mitsuki, sem alterar reservas, estoque, autenticação nem dados
+de outras lojas:
+
+- **Removida a seção "Retirada e pagamento"** do painel (título, campo "Orientação de retirada",
+  campo "Chave Pix", botão "Salvar configurações", e o JavaScript que só existia para sustentar essa
+  tela — `saveSettings()`/`renderSettings()`). A Mitsuki não edita mais esses dois campos numa tela
+  de configurações gerais.
+- **Pix e retirada continuam funcionando** — só a interface de edição saiu do painel, não o dado:
+  `dm_store_status.pickup_instructions`/`pix_key` continuam exatamente como estavam no banco (não
+  foram apagados nem zerados) e continuam sendo lidos normalmente pelo checkout e pela confirmação
+  da reserva (`js/store.js`), exatamente como antes. Se um dia precisarem mudar, isso é feito
+  diretamente no banco pela TaskZap, seguindo o mesmo padrão já usado para `tenants.is_active` e
+  `dm_store_status.is_open`.
+- **Avaliei se seria necessária uma migração para "a reserva ter informação de pagamento" e concluí
+  que não**: `dm_reservations` já tem `payment_status` (`'pendente'`/`'pago'`, com `CHECK` constraint
+  no banco), `payment_confirmed_at` e `payment_confirmed_by` — confirmado por auditoria direta no
+  schema, não por memória de rodadas anteriores. Isso já cobre integralmente o que foi pedido: a
+  reserva nasce com pagamento pendente, e a Mitsuki confirma depois pelo painel (botão "Pix
+  pendente"/"✓ Pix confirmado" em cada pedido, inalterado nesta rodada). Como o sistema já é
+  Pix-only (não existe outra forma de pagamento no fluxo) e o checkout já lê a chave Pix do banco no
+  momento da reserva (efeito equivalente a um "snapshot" informal, sem precisar de coluna nova),
+  **nenhuma migração foi criada nem aplicada** — evitando alteração estrutural desnecessária numa
+  tabela usada só por este tenant, mas seguindo o mesmo cuidado de qualquer mudança de schema.
+- **Removida a faixa fixa "📍 Retirada: ..."** da vitrine (abaixo do status da loja) e da prévia
+  `/demo/` — o elemento (`#pickup-wrap`) foi excluído do HTML, não só escondido, então o espaço
+  fecha normalmente no fluxo da página, sem buraco vazio. A informação de retirada continua
+  aparecendo nos dois momentos em que já aparecia antes: dentro do formulário de checkout
+  ("📍 Retirada com a Mitsuki") e no recibo da tela de confirmação ("Retirada: ...") — e também na
+  mensagem do WhatsApp, inalterada.
+- **"Caixinha pronta" escondida da listagem do painel**: o produto `kind=ready_box` (histórico, já
+  tirado da vitrine/demo em rodada anterior) agora também não aparece na lista de "Estoque do dia" do
+  painel nem nas estatísticas — mas continua existindo no banco, sem nenhuma linha apagada, e
+  continua editável por SQL direto se um dia precisar. O formulário de cadastro genérico já só cria
+  `flavor` desde a rodada anterior (inalterado aqui).
+- **Estatísticas do painel reduzidas para 3 cards**: "Reservas para retirar", "Pix confirmado" e
+  "Docinhos disponíveis" (era "Caixinhas prontas", removida por não fazer mais sentido comercial).
+  Layout em grade: 2 colunas em telas muito estreitas (o terceiro card ocupa a linha inteira sozinho)
+  e 3 colunas a partir de ~400px de largura.
+- **Texto do aviso do painel simplificado**: "🔒 Acesso restrito à administração da NK Doces." (era um
+  parágrafo explicando tecnicamente tenant/TaskZap/is_open). O restante do texto do painel
+  (publicação da loja, dicas de estoque, mensagens de erro) não foi alterado — só o aviso citado
+  explicitamente foi revisado, para não mexer em texto que já estava adequado.
+- **Layout mobile do botão "+ Cadastrar produto"**: agora sempre ocupa uma linha própria, com largura
+  total do card, abaixo do título "Estoque do dia" — corrige o corte/aperto lateral em telas
+  estreitas, sem depender de media query (`flex-basis:100%` no botão dentro do `.panel-top`).
+- **Botões "Ocultar"/"Editar" de cada produto**: agora sempre lado a lado, com a mesma largura e
+  altura, sem sobrepor o nome/preço/estoque do produto (que passou a ocupar sua própria linha acima
+  dos botões em vez de dividir espaço com eles) — testado com nome de produto propositalmente longo
+  para confirmar que não há mais compressão de texto nem sobreposição, em nenhuma das larguras
+  pedidas.
+- **Correção de conflito de CSS encontrado durante o teste**: uma regra antiga `.mini-row-actions`
+  (de uma rodada anterior, quando a listagem ainda mostrava miniatura de foto) sobrescrevia a nova
+  regra por estar mais abaixo no arquivo, fazendo os botões empilharem verticalmente e se
+  sobreporem em vez de ficarem lado a lado — encontrado pelo teste automatizado (não por inspeção
+  visual), removida a regra duplicada/obsoleta.
+
 ## Foto do docinho de leite Ninho — aplicada
 
 Duas fontes tinham sido aprovadas em rodadas anteriores (Jonathan Borba/Unsplash e depois
@@ -876,6 +934,36 @@ todas aprovadas:
 **Não testado nesta rodada**: a foto na vitrine publicada de verdade (`doces-mitsuki.pages.dev`) —
 mesma limitação de rede das rodadas anteriores, testado aqui só contra uma cópia local servida por
 HTTP.
+
+**Nesta rodada** (painel simplificado — sem seção de configurações, sem faixa de retirada fixa, sem
+"Caixinha pronta" na listagem/estatísticas, layout mobile dos botões — sem tocar em reservas,
+estoque, autenticação, WhatsApp ou dados de outras lojas): mesmo procedimento — servidor HTTP local +
+Chromium real via Playwright, Supabase mockado em memória. 39 verificações automatizadas, todas
+aprovadas (38 na primeira execução + 1 corrigida depois de um conflito de CSS real ter sido
+encontrado pelo próprio teste, não por inspeção visual):
+
+- Ausência confirmada, por busca de texto real na tela renderizada (não por leitura de código): seção
+  "Retirada e pagamento", campos "Orientação de retirada"/"Chave Pix", elemento `#settings-form`,
+  switch de abrir/fechar, produto/estatística "Caixinha pronta"/"Caixinhas prontas", faixa
+  "📍 Retirada" na vitrine e na demo.
+- Aviso do painel confirmado como o texto curto pedido, sem menção a "abrir/fechar".
+- Estatística "Docinhos disponíveis" presente no lugar da removida.
+- Botão "+ Cadastrar produto": `getBoundingClientRect()` confirma que fica inteiramente dentro dos
+  limites do card do painel (não corta lateralmente) em todas as larguras testadas.
+- Botões "Ocultar"/"Editar": mesma altura exata, e a posição horizontal de um não invade a área do
+  outro (`box0.x + box0.width <= box1.x`) — testado com um nome de produto propositalmente comprido
+  para forçar o cenário de aperto. A primeira execução pegou um bug real (os botões empilhavam e se
+  sobrepunham, por uma regra CSS antiga com prioridade maior) — corrigido e reconfirmado.
+- Cadastro de produto, checkout, seletor de quantidade, "monte sua caixinha", reserva (RPC chamada
+  exatamente uma vez), link do WhatsApp e informação de retirada dentro do checkout/recibo — todos
+  testados de novo nesta rodada para confirmar que nada quebrou com a remoção do código morto.
+- Demo: seletor de quantidade e "Adicionar seleção" continuam funcionando; sem "Caixinha pronta" nem
+  faixa de retirada, mesmo padrão da vitrine real.
+- Overflow: vitrine e painel, com o novo layout, 0 ocorrências em 320/360/375/390/430px e desktop
+  (1280px).
+
+**Não testado nesta rodada**: as páginas publicadas de verdade em `doces-mitsuki.pages.dev` — mesma
+limitação de rede das rodadas anteriores.
 
 ## Pendências para ativação comercial
 

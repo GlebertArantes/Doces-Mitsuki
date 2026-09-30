@@ -19,24 +19,15 @@
     </header>
     <div class="admin-head"><div class="eyebrow">área administrativa</div><h1 id="greeting">Olá! ♡</h1><p>Abra o cardápio, ajuste seu estoque e acompanhe as reservas em um só lugar.</p></div>
     <div class="admin-body">
-      <div class="admin-alert">🔒 Acesso restrito à Mitsuki e a administradores autorizados da TaskZap. A NK Doces fica sempre disponível para reserva — não depende de nenhum botão manual de abrir/fechar.</div>
+      <div class="admin-alert">🔒 Acesso restrito à administração da NK Doces.</div>
 
-      <section class="panel"><h2>Retirada e pagamento</h2>
-        <form id="settings-form">
-          <label class="field">Orientação de retirada<input name="pickup" maxlength="120" required placeholder="Ex.: Retirar comigo, no administrativo"></label>
-          <label class="field">Chave Pix (opcional)<input name="pix" maxlength="120" autocomplete="off" placeholder="Cadastre quando tiver a chave definitiva"></label>
-          <p class="hint">A chave só aparece no checkout para os clientes se este campo estiver preenchido.</p>
-          <button class="button full" type="submit" style="margin-top:12px">Salvar configurações</button>
-        </form>
-      </section>
-
-      <div class="stats" id="stats"></div>
+      <div class="stats stats-3" id="stats"></div>
 
       <section class="panel"><h2>Publicação da loja</h2><p class="panel-sub" id="publish-caption">Carregando…</p>
         <div class="notice" id="publish-warning">Ativar a publicação faz o cardápio ficar visível publicamente e libera reservas reais. Só ative após confirmar preços, sabores e autorização do retrato com a Mitsuki.</div>
       </section>
 
-      <section class="panel"><div class="panel-top"><div><h2 style="margin:0">Estoque do dia</h2><p class="panel-sub" style="margin:4px 0 0">Cadastre, edite e publique seus produtos.</p></div><button class="button" id="new-product-btn" style="white-space:nowrap">+ Cadastrar produto</button></div><div id="inventory" style="margin-top:8px"></div></section>
+      <section class="panel"><div class="panel-top wrap"><div><h2 style="margin:0">Estoque do dia</h2><p class="panel-sub" style="margin:4px 0 0">Cadastre, edite e publique seus produtos.</p></div><button class="button" id="new-product-btn">+ Cadastrar produto</button></div><div id="inventory" style="margin-top:8px"></div></section>
 
       <section class="panel"><h2>Reservas recebidas</h2><p class="panel-sub">Marque quando o pedido for separado, retirado ou pago.</p><div id="orders"></div></section>
     </div>

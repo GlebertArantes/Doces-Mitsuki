@@ -112,8 +112,6 @@ function render() {
 
   $('store-status').classList.remove('closed');
   $('store-status').innerHTML = '<div><strong><span class="green-dot"></span>Hoje tem docinhos! 🍬</strong><p>Prévia de demonstração — escolha à vontade, nada é reservado de verdade.</p></div><span class="badge">● Sempre disponível (demo)</span>';
-  $('pickup-wrap').classList.remove('hidden');
-  $('pickup-display').innerHTML = '📍 Retirada: <b>' + esc(storeStatus.pickup_instructions) + '</b>';
 
   const p = [];
   if (filter !== 'single') {

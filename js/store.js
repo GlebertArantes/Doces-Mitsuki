@@ -122,7 +122,6 @@ async function loadData() {
 function renderUnavailable() {
   $('store-status').classList.remove('closed');
   $('store-status').innerHTML = '<div><strong>Em breve ♡</strong><p>A lojinha da NK Doces ainda está em preparação. Volte em breve!</p></div>';
-  $('pickup-wrap').classList.add('hidden');
   $('products').innerHTML = '';
   $('items-pill').textContent = '';
   $('quiet-note').textContent = '';
@@ -162,8 +161,6 @@ function render() {
   $('store-status').innerHTML = open
     ? '<div><strong><span class="green-dot"></span>Hoje tem docinhos! 🍬</strong><p>Escolha seus favoritos e reserve para retirada.</p></div><span class="badge">● Aberto</span>'
     : '<div><strong><span class="green-dot"></span>Sem pronta entrega agora</strong><p>Volte quando a Mitsuki abrir as vendas.</p></div><span class="badge">Fechado</span>';
-  $('pickup-wrap').classList.remove('hidden');
-  $('pickup-display').innerHTML = '📍 Retirada: <b>' + esc(storeStatus.pickup_instructions) + '</b>';
 
   const p = [];
   if (filter !== 'single') {

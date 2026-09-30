@@ -259,26 +259,44 @@ Três mudanças de experiência nesta rodada, pedidas depois de testar a versão
 
 ## Foto do docinho de leite Ninho — pendente por bloqueio de rede
 
-Uma foto foi formalmente aprovada para uso: **"Sweet coconut balls topped with white cream"**, por
-**Jonathan Borba** (@jonathanborba), publicada no Unsplash sob a Unsplash License (uso gratuito,
-conforme a página da foto) —
-`https://unsplash.com/photos/sweet-coconut-balls-topped-with-white-cream-PzbjGm6EPhE`.
+**Duas fontes já foram formalmente aprovadas, em duas rodadas separadas, e nenhuma pôde ser baixada
+— o bloqueio é da política de rede deste ambiente, não das fontes escolhidas:**
 
-**Não consegui aplicá-la nesta rodada**: o ambiente onde esta sessão roda tem uma política de rede
-que bloqueia qualquer conexão para `unsplash.com` — confirmado de duas formas independentes: um
-`curl` direto (`CONNECT tunnel failed, response 403`, com o proxy de saída explicitando
-"connect_rejected... organization policy") e uma tentativa de busca de página via ferramenta própria
-do Claude Code, que devolveu o erro explícito `EGRESS_BLOCKED` para o domínio `unsplash.com`. As
-duas apontam para a mesma causa — política de rede do ambiente, não uma falha pontual de uma URL
-específica. Como pedido explicitamente no anexo desta rodada, **não substituí por nenhuma outra
-imagem** — a foto provisória atual (`assets/img/ninho.webp`) continua exatamente como estava.
+1. **"Sweet coconut balls topped with white cream"**, por **Jonathan Borba** (@jonathanborba),
+   Unsplash License —
+   `https://unsplash.com/photos/sweet-coconut-balls-topped-with-white-cream-PzbjGm6EPhE`.
+   Bloqueado: `unsplash.com` recusado pelo proxy de saída (`connect_rejected`, política da
+   organização) e pela ferramenta de busca de página (`EGRESS_BLOCKED`).
+2. **"Brigadeiro de chocolate branco 20190209.jpg"**, por **Londonjackbooks**, Wikimedia Commons,
+   licença **CC0 1.0 Universal / Public Domain Dedication** (uso livre, inclusive comercial, sem
+   necessidade de autorização) —
+   `https://commons.wikimedia.org/wiki/File:Brigadeiro_de_chocolate_branco_20190209.jpg`, arquivo
+   original em
+   `https://upload.wikimedia.org/wikipedia/commons/9/90/Brigadeiro_de_chocolate_branco_20190209.jpg`.
+   Orientação de recorte já definida para quando a foto puder ser baixada: priorizar os três
+   brigadeiros brancos da parte superior da imagem, reduzindo/removendo do enquadramento o
+   brigadeiro da frente com o detalhe escuro de chocolate. Bloqueado do mesmo jeito: tanto
+   `upload.wikimedia.org` quanto `commons.wikimedia.org` e `wikimedia.org` recusados pelo proxy de
+   saída (`connect_rejected`, política da organização) e pela ferramenta de busca de página
+   (`EGRESS_BLOCKED`) — confirmando que não é um problema específico do Unsplash, e sim uma
+   política de rede deste ambiente que bloqueia hosts externos de imagem em geral (o mesmo
+   ambiente permite, por exemplo, `github.com` para as operações de git desta sessão, mas não
+   hosts genéricos de mídia).
 
-**Para aplicar a foto aprovada**: alguém com acesso ao ambiente do Claude Code precisa liberar
-`unsplash.com` (ou pelo menos `images.unsplash.com`) nas configurações de rede do ambiente (menu do
-ambiente na barra de título da sessão → Editar → Acesso de rede), e então pedir para eu (ou a
-próxima sessão) baixar, otimizar em WebP e aplicar a imagem já aprovada acima — a referência
-completa (fonte, fotógrafo, licença) já está registrada neste README para isso não precisar ser
-reconfirmado depois.
+Como pedido explicitamente nos dois anexos, **não substituí por nenhuma outra imagem em nenhuma das
+duas tentativas** — a foto provisória atual (`assets/img/ninho.webp`) continua exatamente como
+estava desde antes desta sessão.
+
+**Para aplicar a foto aprovada**: alguém com acesso ao ambiente do Claude Code precisa liberar o
+domínio da fonte escolhida (`unsplash.com`/`images.unsplash.com` para a opção 1, ou
+`upload.wikimedia.org`/`commons.wikimedia.org` para a opção 2 — a mais recente aprovada) nas
+configurações de rede do ambiente (menu do ambiente na barra de título da sessão → Editar → Acesso
+de rede), e então pedir para eu (ou a próxima sessão) baixar, recortar conforme a orientação acima,
+otimizar em WebP e aplicar a imagem — toda a referência (fonte, autor, licença, orientação de
+recorte) já está registrada aqui para isso não precisar ser reconfirmado depois. Alternativamente,
+qualquer pessoa com acesso à internet pode baixar o arquivo e enviá-lo diretamente nesta conversa
+(como imagem, não como link) — nesse caso eu aplico o recorte/otimização sem depender de rede
+nenhuma.
 
 ## Branches
 
@@ -867,13 +885,14 @@ contra o Supabase publicado, o upload de foto real no bucket, e as páginas publ
 4. **Fotos reais dos produtos**: a Mitsuki já pode cadastrar suas próprias fotos pelo painel (ver
    "Cadastro de produtos e fotos" acima); os 5 produtos originais continuam com as imagens
    ilustrativas do protótipo V3 até ela enviar uma foto real de cada um.
-5. **Foto do docinho de leite Ninho**: já há uma foto **aprovada** (Jonathan Borba, Unsplash License
-   — ver "Foto do docinho de leite Ninho — pendente por bloqueio de rede" acima), mas não pude
-   aplicá-la nesta rodada porque o ambiente onde esta sessão roda bloqueia conexões para
-   `unsplash.com` por política de rede. Mantive a imagem provisória atual (`assets/img/ninho.webp`)
-   sem alteração, como pedido explicitamente para o caso de impedimento técnico. Para resolver:
-   libere `unsplash.com` nas configurações de rede do ambiente e peça para aplicar a foto já aprovada
-   (fonte/fotógrafo/licença documentados acima, não precisa reconfirmar).
+5. **Foto do docinho de leite Ninho**: duas fontes já foram **aprovadas**, em duas rodadas (Jonathan
+   Borba/Unsplash, e depois Londonjackbooks/Wikimedia Commons CC0 — ver "Foto do docinho de leite
+   Ninho — pendente por bloqueio de rede" acima), mas nenhuma pôde ser aplicada: o ambiente onde
+   esta sessão roda bloqueia conexões para ambos os domínios por política de rede (confirmado, não
+   um erro pontual). Mantive a imagem provisória atual (`assets/img/ninho.webp`) sem alteração nas
+   duas tentativas, como pedido explicitamente. Para resolver: libere o domínio da fonte escolhida
+   nas configurações de rede do ambiente, ou envie o arquivo de imagem diretamente nesta conversa
+   (fonte/autor/licença/orientação de recorte já documentados acima, não precisa reconfirmar).
 6. **Teste real do login, do cadastro de produto com foto e do fluxo de WhatsApp pelo navegador**:
    confirmar em `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um
    navegador/celular real, que o login funciona, que um produto pode ser cadastrado com foto de

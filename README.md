@@ -257,46 +257,30 @@ Três mudanças de experiência nesta rodada, pedidas depois de testar a versão
   celular) — o cadastro, a edição e o upload/troca de foto continuam funcionando normalmente dentro
   do formulário de cada produto, e a foto de capa continua sendo usada normalmente na vitrine.
 
-## Foto do docinho de leite Ninho — pendente por bloqueio de rede
+## Foto do docinho de leite Ninho — aplicada
 
-**Duas fontes já foram formalmente aprovadas, em duas rodadas separadas, e nenhuma pôde ser baixada
-— o bloqueio é da política de rede deste ambiente, não das fontes escolhidas:**
+Duas fontes tinham sido aprovadas em rodadas anteriores (Jonathan Borba/Unsplash e depois
+Londonjackbooks/Wikimedia Commons CC0), mas o ambiente desta sessão bloqueava conexão para os dois
+domínios por política de rede — ver histórico no commit `0f04e6e`. Como o download automático não
+era possível, a foto (a segunda opção aprovada, "Brigadeiro de chocolate branco 20190209.jpg") foi
+**enviada diretamente nesta conversa como arquivo de imagem**, contornando a necessidade de rede.
 
-1. **"Sweet coconut balls topped with white cream"**, por **Jonathan Borba** (@jonathanborba),
-   Unsplash License —
-   `https://unsplash.com/photos/sweet-coconut-balls-topped-with-white-cream-PzbjGm6EPhE`.
-   Bloqueado: `unsplash.com` recusado pelo proxy de saída (`connect_rejected`, política da
-   organização) e pela ferramenta de busca de página (`EGRESS_BLOCKED`).
-2. **"Brigadeiro de chocolate branco 20190209.jpg"**, por **Londonjackbooks**, Wikimedia Commons,
-   licença **CC0 1.0 Universal / Public Domain Dedication** (uso livre, inclusive comercial, sem
-   necessidade de autorização) —
-   `https://commons.wikimedia.org/wiki/File:Brigadeiro_de_chocolate_branco_20190209.jpg`, arquivo
-   original em
-   `https://upload.wikimedia.org/wikipedia/commons/9/90/Brigadeiro_de_chocolate_branco_20190209.jpg`.
-   Orientação de recorte já definida para quando a foto puder ser baixada: priorizar os três
-   brigadeiros brancos da parte superior da imagem, reduzindo/removendo do enquadramento o
-   brigadeiro da frente com o detalhe escuro de chocolate. Bloqueado do mesmo jeito: tanto
-   `upload.wikimedia.org` quanto `commons.wikimedia.org` e `wikimedia.org` recusados pelo proxy de
-   saída (`connect_rejected`, política da organização) e pela ferramenta de busca de página
-   (`EGRESS_BLOCKED`) — confirmando que não é um problema específico do Unsplash, e sim uma
-   política de rede deste ambiente que bloqueia hosts externos de imagem em geral (o mesmo
-   ambiente permite, por exemplo, `github.com` para as operações de git desta sessão, mas não
-   hosts genéricos de mídia).
-
-Como pedido explicitamente nos dois anexos, **não substituí por nenhuma outra imagem em nenhuma das
-duas tentativas** — a foto provisória atual (`assets/img/ninho.webp`) continua exatamente como
-estava desde antes desta sessão.
-
-**Para aplicar a foto aprovada**: alguém com acesso ao ambiente do Claude Code precisa liberar o
-domínio da fonte escolhida (`unsplash.com`/`images.unsplash.com` para a opção 1, ou
-`upload.wikimedia.org`/`commons.wikimedia.org` para a opção 2 — a mais recente aprovada) nas
-configurações de rede do ambiente (menu do ambiente na barra de título da sessão → Editar → Acesso
-de rede), e então pedir para eu (ou a próxima sessão) baixar, recortar conforme a orientação acima,
-otimizar em WebP e aplicar a imagem — toda a referência (fonte, autor, licença, orientação de
-recorte) já está registrada aqui para isso não precisar ser reconfirmado depois. Alternativamente,
-qualquer pessoa com acesso à internet pode baixar o arquivo e enviá-lo diretamente nesta conversa
-(como imagem, não como link) — nesse caso eu aplico o recorte/otimização sem depender de rede
-nenhuma.
+- **Fonte**: Wikimedia Commons —
+  `https://commons.wikimedia.org/wiki/File:Brigadeiro_de_chocolate_branco_20190209.jpg`
+- **Autor**: Londonjackbooks
+- **Licença**: CC0 1.0 Universal / Public Domain Dedication (uso livre, inclusive comercial, sem
+  necessidade de autorização, conforme a página da fonte)
+- **Uso na NK Doces**: imagem ilustrativa do "Docinho de leite Ninho"
+- **Tratamento aplicado**: recorte quadrado com Pillow (Python), priorizando os três brigadeiros
+  brancos da parte superior da imagem original e excluindo por completo o brigadeiro da frente com
+  o grão de café escuro (testado visualmente antes de aplicar: o primeiro recorte ainda deixava a
+  borda do grão visível na base, corrigido num segundo recorte mais justo até confirmar exclusão
+  total), redimensionado para 900×900px e exportado em WebP qualidade 82 — arquivo final com
+  **27.308 bytes (~27 KB)**, na mesma faixa de peso dos outros produtos (`brig.webp` 38 KB,
+  `custom.webp`/`ready.webp` 46 KB, `beij.webp` 25 KB).
+- **Arquivo alterado**: `assets/img/ninho.webp` (substituído; mesmo caminho usado como fallback
+  estático em `js/store.js`/`js/admin.js`/`demo/js/demo-data.js` — nenhuma mudança de código
+  necessária, nenhuma linha nova em `product_media`, nenhuma alteração no Supabase).
 
 ## Branches
 
@@ -874,6 +858,25 @@ em memória. 36 verificações automatizadas, todas aprovadas:
 contra o Supabase publicado, o upload de foto real no bucket, e as páginas publicadas de verdade em
 `doces-mitsuki.pages.dev` — mesmas limitações já descritas nas rodadas anteriores.
 
+**Nesta rodada** (troca da foto do docinho de leite Ninho — sem tocar em preços, estoque, Pix,
+reservas, WhatsApp, autenticação, outros produtos ou outros tenants): mesmo procedimento — servidor
+HTTP local + Chromium real via Playwright, Supabase mockado em memória (sem `product_media`
+cadastrado, forçando o fallback estático a ser exercido de verdade). 14 verificações automatizadas,
+todas aprovadas:
+
+- O card "Docinho de leite Ninho" carrega `assets/img/ninho.webp` (a nova foto), enquanto
+  Brigadeiro e Beijinho continuam com `brig.webp`/`beij.webp` — confirma que só o arquivo certo foi
+  trocado, sem afetar os outros produtos.
+- `assets/img/ninho.webp` responde HTTP 200 com corpo real de imagem (não um arquivo vazio/quebrado).
+- Seletor de quantidade (`[-] N [+]`) e transferência para o carrinho continuam funcionando
+  normalmente no card do Ninho.
+- A "monte sua caixinha" continua listando os 3 sabores, incluindo o Ninho com a foto nova.
+- Overflow: 0 ocorrências em 320/360/375/390/430px e desktop (1280px) com a nova imagem carregada.
+
+**Não testado nesta rodada**: a foto na vitrine publicada de verdade (`doces-mitsuki.pages.dev`) —
+mesma limitação de rede das rodadas anteriores, testado aqui só contra uma cópia local servida por
+HTTP.
+
 ## Pendências para ativação comercial
 
 1. ~~Conta de administração da Mitsuki~~ — **já existe** (`dm_admin_usernames`, username
@@ -885,14 +888,9 @@ contra o Supabase publicado, o upload de foto real no bucket, e as páginas publ
 4. **Fotos reais dos produtos**: a Mitsuki já pode cadastrar suas próprias fotos pelo painel (ver
    "Cadastro de produtos e fotos" acima); os 5 produtos originais continuam com as imagens
    ilustrativas do protótipo V3 até ela enviar uma foto real de cada um.
-5. **Foto do docinho de leite Ninho**: duas fontes já foram **aprovadas**, em duas rodadas (Jonathan
-   Borba/Unsplash, e depois Londonjackbooks/Wikimedia Commons CC0 — ver "Foto do docinho de leite
-   Ninho — pendente por bloqueio de rede" acima), mas nenhuma pôde ser aplicada: o ambiente onde
-   esta sessão roda bloqueia conexões para ambos os domínios por política de rede (confirmado, não
-   um erro pontual). Mantive a imagem provisória atual (`assets/img/ninho.webp`) sem alteração nas
-   duas tentativas, como pedido explicitamente. Para resolver: libere o domínio da fonte escolhida
-   nas configurações de rede do ambiente, ou envie o arquivo de imagem diretamente nesta conversa
-   (fonte/autor/licença/orientação de recorte já documentados acima, não precisa reconfirmar).
+5. ~~Foto do docinho de leite Ninho~~ — **aplicada** (Londonjackbooks/Wikimedia Commons CC0, enviada
+   diretamente como arquivo depois do bloqueio de rede a duas fontes — ver "Foto do docinho de leite
+   Ninho — aplicada" acima). Nada a fazer aqui.
 6. **Teste real do login, do cadastro de produto com foto e do fluxo de WhatsApp pelo navegador**:
    confirmar em `https://doces-mitsuki.pages.dev/admin/` e na vitrine publicada, de um
    navegador/celular real, que o login funciona, que um produto pode ser cadastrado com foto de
